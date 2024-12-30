@@ -1,0 +1,128 @@
+/* Individual stock card */
+.stock-card {
+    display: flex;
+    flex-direction: column; /* Stack content vertically */
+    align-items: center; /* Center-align the content inside the card */
+    background-color: #ffffff; /* White background */
+    border: 2px solid #ddd; /* Border for the card */
+    border-radius: 8px; /* Rounded corners */
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Subtle shadow for elevation */
+    padding: 20px; /* Inner padding for content */
+    width: 100%; /* Full width of the parent */
+    max-width: 700px; /* Adjust the maximum width to make the container larger */
+    margin: 20px auto; /* Center the card with space between cards */
+    overflow: hidden; /* Prevent overflow issues */
+  }
+  
+  
+  
+  /* Chart container */
+  .chart-container {
+    width: 100%; /* Take up the full width of the parent */
+    max-width: 100%; /* Prevent horizontal overflow */
+    height: auto; /* Adjust height dynamically */
+    overflow: hidden; /* Ensure no clipping occurs */
+    display: flex;
+    justify-content: center; /* Center-align the chart horizontally */
+  }
+  
+  
+  
+  /* Wrapper for all cards */
+  .stock-list {
+    display: flex;
+    flex-direction: column; /* Stack cards vertically */
+    gap: 20px; /* Space between cards */
+    padding: 20px; /* Add padding to the container */
+    margin: 0 auto; /* Center the container horizontally */
+    max-width: 800px; /* Limit overall container width */
+  }
+  
+  
+  
+  /* Stock info text */
+  .stock-info {
+    text-align: center;
+    font-family: Arial, sans-serif;
+    margin-bottom: 10px; /* Space below the stock info */
+  }
+  
+  .stock-info h4 {
+    margin-bottom: 10px;
+    color: #333;
+    font-size: 18px;
+    font-weight: bold;
+  }
+  
+  .stock-info p {
+    margin: 5px 0;
+    color: #555;
+    font-size: 14px;
+  }
+  .stock-scanner {
+    text-align: center;
+    padding: 20px;
+  }
+  
+  .price-filter {
+    display: flex;
+    justify-content: center; /* Center the elements horizontally */
+    align-items: center; /* Align the elements vertically */
+    gap: 15px; /* Add space between inputs and button */
+    margin-bottom: 20px;
+  }
+  
+  .price-filter label {
+    display: flex;
+    flex-direction: column;
+    font-weight: bold;
+    align-items: center; /* Center-align labels with inputs */
+  }
+  
+  .price-filter input {
+    padding: 10px; /* Add padding for a comfortable input field */
+    margin-top: 5px; /* Space between label and input */
+    border: 2px solid #007bff; /* Blue border */
+    border-radius: 20px; /* Rounded corners */
+    font-size: 16px; /* Increase font size for better readability */
+    outline: none; /* Remove default outline on focus */
+    transition: border-color 0.3s ease; /* Smooth transition for hover effect */
+    width: 200px; /* Ensure input fields are the same width */
+  }
+  
+  .price-filter input:focus {
+    border-color: #0056b3; /* Darker blue when focused */
+  }
+  
+  .price-filter button {
+    padding: 10px 20px;
+    background-color: #007bff; /* Blue background */
+    color: white;
+    border: none;
+    border-radius: 20px; /* Rounded corners */
+    font-size: 16px;
+    cursor: pointer;
+    transition: background-color 0.3s ease, transform 0.2s ease; /* Smooth hover and click effects */
+    height: 50px; /* Ensure consistent height with input fields */
+    margin-top: 10px; /* Align with input height */
+  }
+  
+  .price-filter button:hover {
+    background-color: #0056b3; /* Darker blue on hover */
+    transform: scale(1.05); /* Slightly enlarge on hover */
+  }
+  
+  .price-filter button:active {
+    transform: scale(0.95); /* Slightly shrink on click */
+  }
+  
+  
+  
+  .stock-list {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+  
+  

@@ -1,0 +1,61 @@
+.chart-container {
+  display: grid;
+  grid-template-columns: 2fr 1fr auto; /* Allow last column (news) to expand */
+  gap: 20px;
+  align-items: start;
+  width: 100%; /* Full width */
+  max-width: 1600px; /* Optional: Limit the maximum width */
+  margin: 0 auto; /* Center horizontally if max-width is applied */
+  height: auto;
+  border: 1px solid #ddd;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  border-radius: 8px
+}
+
+
+
+.chart-wrapper {
+  grid-column: 1; /* Occupies the first column */
+  height: 400px; /* Fixed height */
+  background-color: #ffffff; /* Optional: Ensure clear separation */
+}
+
+.chart-info {
+  grid-column: 2; /* Second column for Stock Info */
+  height: 400px; /* Match height with other elements */
+  padding: 10px;
+  background-color: #f8f9fa;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+}
+
+.chart-title {
+  font-size: 18px;
+  margin-bottom: 10px;
+  text-align: center;
+}
+
+.chart-stats, .price-info {
+  margin-top: 10px;
+}
+
+.chart-stats p, .price-info p {
+  margin: 5px 0;
+  font-size: 14px;
+}
+.news-widget {
+  grid-column: 3; /* Third column for News */
+  height: 400px; /* Match height with others */
+  padding: 10px;
+  background-color: #f8f9fa;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+}
+
+.chart-info {
+  grid-column: 2; /* Middle column */
+}
+
+.news-widget {
+  grid-column: 3; /* Right column */
+}

@@ -1,0 +1,12 @@
+/* src/styles/App.css */
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+  }
+  
+  nav {
+    background-color: #282c34;
+    padding: 10px;
+    color: white;
+  }
+  
