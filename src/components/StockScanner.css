@@ -1,18 +1,18 @@
 /* Individual stock card */
 .stock-card {
-    display: flex;
-    flex-direction: column; /* Stack content vertically */
-    align-items: center; /* Center-align the content inside the card */
-    background-color: #ffffff; /* White background */
-    border: 2px solid #ddd; /* Border for the card */
-    border-radius: 8px; /* Rounded corners */
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Subtle shadow for elevation */
-    padding: 20px; /* Inner padding for content */
-    width: 100%; /* Full width of the parent */
-    max-width: 700px; /* Adjust the maximum width to make the container larger */
-    margin: 20px auto; /* Center the card with space between cards */
-    overflow: hidden; /* Prevent overflow issues */
-  }
+  display: flex;
+  flex-direction: row; /* Keep the chart and info side by side */
+  gap: 20px; /* Space between chart and additional data */
+  width: 100%; /* Take up the full width of the parent */
+  max-width: 1800px; /* Increase max width for a wider layout */
+  padding: 20px;
+  background-color: #ffffff;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  margin: 20px auto;
+}
+
   
   
   

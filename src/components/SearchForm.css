@@ -1,0 +1,55 @@
+.search-form {
+    display: flex;
+    flex-wrap: wrap; /* Ensures proper layout when the screen is resized */
+    gap: 15px; /* Space between fields */
+    align-items: center; /* Aligns the input fields and button */
+    justify-content: space-evenly; /* Distributes the fields evenly across the row */
+    padding: 10px;
+    margin-bottom: 20px;
+    background-color: #f9f9f9; /* Optional: Light background for better visibility */
+    border: 1px solid #ddd; /* Optional: Border for separation */
+    border-radius: 6px; /* Rounded corners */
+  }
+  
+  .search-form label {
+    display: flex;
+    flex-direction: column; /* Stacks the label and input vertically */
+    font-size: 14px;
+    font-weight: bold;
+    color: #333; /* Darker text color */
+  }
+  
+  .search-form input {
+    padding: 8px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+    width: 150px; /* Consistent width for inputs */
+    margin-top: 5px; /* Adds space between the label and input */
+  }
+  
+  .search-form button {
+    padding: 10px 20px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  
+  .search-form button:hover {
+    background-color: #0056b3; /* Darker blue on hover */
+  }
+  
+  @media (max-width: 768px) {
+    .search-form {
+      flex-direction: column; /* Stack inputs vertically on smaller screens */
+      gap: 10px;
+    }
+  
+    .search-form input {
+      width: 100%; /* Full-width inputs on smaller screens */
+    }
+  }
+  
