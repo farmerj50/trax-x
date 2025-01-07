@@ -168,19 +168,26 @@ def candlestick_chart():
         return jsonify({"error": str(e)}), 500
 @app.route("/api/ticker-news", methods=["GET"])
 def ticker_news():
-    ticker = request.args.get("ticker")
-    if not ticker:
+    tickers = request.args.get("ticker")  # Expect comma-separated tickers
+    if not tickers:
         return jsonify({"error": "Ticker is required"}), 400
 
-    url = f"https://api.polygon.io/v2/reference/news?ticker={ticker}&limit=5&apiKey={POLYGON_API_KEY}"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return jsonify(response.json())
-    except requests.exceptions.HTTPError as e:
-        return jsonify({"error": f"Error fetching news for {ticker}: {str(e)}"}), 500
-    except Exception as e:
-        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+    ticker_list = tickers.split(",")  # Split tickers into a list
+    all_news = {}
+
+    for ticker in ticker_list:
+        url = f"https://api.polygon.io/v2/reference/news?ticker={ticker}&limit=5&apiKey={POLYGON_API_KEY}"
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            all_news[ticker] = response.json().get("results", [])
+        except requests.exceptions.HTTPError as e:
+            all_news[ticker] = {"error": f"Error fetching news for {ticker}: {str(e)}"}
+        except Exception as e:
+            all_news[ticker] = {"error": f"Unexpected error: {str(e)}"}
+
+    return jsonify(all_news)  # Return news grouped by ticker
+
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
