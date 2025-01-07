@@ -106,17 +106,18 @@ const StockScanner = () => {
       <div className="stock-list">
         {stocks && stocks.length > 0 ? (
           stocks.map((stock) => (
-            <CandlestickChart
-              key={stock.T} // Use "T" for the ticker key
-              ticker={stock.T} // Use "T" for the ticker
-              entryPoint={stock.c * 0.95} // Use "c" (close price) for calculations
-              exitPoint={stock.c * 1.10} // Use "c" (close price) for calculations
-              additionalData={`Volatility: ${(stock.volatility * 100).toFixed(
-                2
-              )}%, Change: ${(stock.price_change * 100).toFixed(2)}%, RSI: ${
-                stock.rsi
-              }`}
-            />
+            <div className="stock-card" key={stock.T}>
+              <CandlestickChart
+                ticker={stock.T} // Pass ticker symbol
+                entryPoint={stock.c * 0.95} // Entry point is 5% below close
+                exitPoint={stock.c * 1.1} // Exit point is 10% above close
+                additionalData={{
+                  volatility: `${(stock.volatility * 100).toFixed(2)}%`,
+                  change: `${(stock.price_change * 100).toFixed(2)}%`,
+                  rsi: stock.rsi || "N/A",
+                }} // Pass formatted additional data
+              />
+            </div>
           ))
         ) : (
           <p style={{ textAlign: "center" }}>No stocks found. Please adjust your criteria.</p>
