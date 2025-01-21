@@ -29,3 +29,13 @@
   justify-content: center; /* Center the content */
   height: 400px; /* Match the height of the chart */
 }
+.sentiment-chart-container {
+  flex: 1; /* Sentiment chart occupies 1 part of the available space */
+  height: 500px; /* Match the height of the chart */
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background-color: #f9f9f9;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}

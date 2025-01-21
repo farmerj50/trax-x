@@ -14,6 +14,8 @@ from utils.scheduler import initialize_scheduler
 from cachetools import TTLCache, cached
 from utils.fetch_stock_performance import fetch_stock_performance
 from utils.fetch_ticker_news import fetch_ticker_news  # Import the utility function
+from utils.sentiment_plot import fetch_sentiment_trend, generate_sentiment_plot
+
 
 # Initialize Flask app and scheduler
 app = Flask(__name__)
@@ -187,6 +189,52 @@ def ticker_news():
             all_news[ticker] = {"error": f"Unexpected error: {str(e)}"}
 
     return jsonify(all_news)  # Return news grouped by ticker
+@app.route('/api/sentiment-plot', methods=['GET'])
+def sentiment_plot():
+    """
+    API endpoint to fetch sentiment trends and reasoning for a ticker within a date range.
+    """
+    try:
+        ticker = request.args.get("ticker")
+        start_date = request.args.get("start_date", (datetime.today() - timedelta(days=90)).strftime("%Y-%m-%d"))
+        end_date = request.args.get("end_date", datetime.today().strftime("%Y-%m-%d"))
+
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is missing"}), 400
+
+        # Fetch sentiment data
+        sentiment_data = fetch_sentiment_trend(ticker, start_date, end_date)
+
+        if sentiment_data.empty:
+            return jsonify({"error": "No sentiment data available for this ticker"}), 404
+
+        # Optional: Extract reasoning from insights
+        sentiment_reasons = []
+        for day in sentiment_data.itertuples():
+            daily_reason = {
+                "date": day.date,
+                "reasons": []
+            }
+            # Add sentiment reasoning if available
+            for insight in getattr(day, 'insights', []):
+                daily_reason["reasons"].append({
+                    "sentiment": insight.sentiment,
+                    "reasoning": insight.sentiment_reasoning,
+                })
+            sentiment_reasons.append(daily_reason)
+
+        return jsonify({
+            "dates": sentiment_data['date'].tolist(),
+            "positive": sentiment_data['positive'].tolist(),
+            "negative": sentiment_data['negative'].tolist(),
+            "neutral": sentiment_data['neutral'].tolist(),
+            "sentiment_reasons": sentiment_reasons,
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 
 
 if __name__ == "__main__":
