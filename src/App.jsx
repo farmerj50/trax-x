@@ -45,9 +45,20 @@ const App = () => {
 
   return (
     <>
-      <Navbar />
+      {/* Navigation Menu */}
+      <div className="menu-bar">
+        <h1 className="menu-title">AI Stock Scanner</h1>
+        <div className="menu-buttons">
+          <button>Stocks</button>
+          <button>Options</button>
+          <button>Crypto</button>
+          <button>Short Sales</button>
+        </div>
+      </div>
+
+      {/* Main Layout */}
       <div className="app-layout">
-        {/* Search Bar */}
+        {/* Search Form */}
         <div className="search-bar">
           <SearchForm onSearch={fetchStocks} />
         </div>
