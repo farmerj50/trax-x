@@ -1,0 +1,97 @@
+/* Ensure the root container has no restrictions */
+body, html, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%; /* Full height of the viewport */
+  width: 100%;  /* Full width of the viewport */
+}
+
+/* Ensure the StocksPage container spans the full space */
+.stocks-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%; /* Full height of the viewport */
+  width: 100%; /* Full width of the viewport */
+}
+
+/* Main content section containing chart and panels */
+.stocks-page .main-content {
+  display: flex;
+  gap: 20px;
+  flex: 1; /* Takes up all remaining height */
+  width: 100%; /* Full width */
+}
+
+/* Chart container to occupy full width and height */
+.stocks-page .chart-container {
+  display: flex;
+  flex: 3; /* 3x the width of info-panels */
+  justify-content: center;
+  align-items: center;
+  width: 100%; /* Full width */
+  height: 100%; /* Full height */
+}
+
+/* Chart wrapper to ensure the chart SVG respects container dimensions */
+.stocks-page .chart-container-stock-page {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%; /* Full width */
+  height: 100%; /* Full height */
+  overflow: hidden; /* Prevent overflow */
+  position: relative;
+  background-color: #f9f9f9; /* Optional: background for visual distinction */
+}
+
+/* Ensure the chart SVG scales */
+.stocks-page .chart-container-stock-page svg {
+  width: 100% !important;
+  height: 100% !important;
+  position: relative;
+}
+#stockchart .e-toolbar-items {
+  display: flex !important; /* Use flexbox for horizontal layout */
+  flex-wrap: nowrap !important; /* Prevent wrapping to the next line */
+  justify-content: flex-start; /* Align items to the left */
+  align-items: center; /* Center items vertically */
+  gap: 10px; /* Add spacing between items */
+  overflow: visible !important; /* Ensure all items are visible */
+}
+
+#stockchart .e-toolbar-item {
+  white-space: nowrap; /* Prevent text from breaking to a new line */
+  padding: 5px 10px; /* Adjust spacing */
+  margin: 0; /* Remove any margin that could misalign */
+  background: none !important; /* Ensure clean styling */
+  border: none !important;
+  cursor: pointer;
+  color: #333; /* Set text color */
+}
+
+#stockchart .e-toolbar-item {
+  display: inline-block !important; /* Ensure each button aligns inline */
+  text-align: center;
+  vertical-align: middle;
+}
+#stockchart .e-toolbar-items {
+  overflow: visible !important;
+}
+#stockchart .e-toolbar {
+  position: relative !important;
+  top: 10px; /* Adjust position relative to the chart */
+  width: 100%; /* Full width to align items */
+  background: #f9f9f9; /* Light background for better visibility */
+  padding: 5px 0; /* Padding for cleaner layout */
+  z-index: 10; /* Ensure it appears above other elements */
+}
+
+
+
+
+
+
+
+
+

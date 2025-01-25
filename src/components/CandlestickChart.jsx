@@ -15,7 +15,7 @@ import { registerLicense } from "@syncfusion/ej2-base";
 // Register the Syncfusion license
 registerLicense("Ngo9BigBOggjHTQxAR8/V1NMaF5cXmRCf1FpRmJGdld5fUVHYVZUTXxaS00DNHVRdkdmWX5ednVWQ2BfVEJ+WEY=");
 
-const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData }) => {
+const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageType }) => {
   const [chartData, setChartData] = useState([]);
   const [error, setError] = useState("");
 
@@ -49,6 +49,10 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData }) => 
     fetchChartData();
   }, [ticker]);
 
+  // Conditional height and width based on pageType
+  const chartHeight = pageType === "stocksPage" ? "100%" : "400px";
+  const chartWidth = pageType === "stocksPage" ? "100%" : "100%";
+
   return (
     <div className="chart-container">
       {/* Render error if data fetch fails */}
@@ -62,8 +66,8 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData }) => 
           tooltip={{ enable: true }}
           crosshair={{ enable: true, lineType: "Both" }}
           zoomSettings={{ enableMouseWheelZooming: true, mode: "XY" }}
-          height="400px"
-          width="100%"
+          height={chartHeight} // Dynamic height
+          width={chartWidth} // Dynamic width
         >
           <Inject services={[CandleSeries, DateTime, Tooltip, Zoom, Crosshair]} />
           <SeriesCollectionDirective>

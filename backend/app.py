@@ -15,11 +15,19 @@ from cachetools import TTLCache, cached
 from utils.fetch_stock_performance import fetch_stock_performance
 from utils.fetch_ticker_news import fetch_ticker_news  # Import the utility function
 from utils.sentiment_plot import fetch_sentiment_trend, generate_sentiment_plot
+from flask_socketio import SocketIO
+from utils.realtime_tracking import track_stock_event, fetch_live_stock_data
 
 
 # Initialize Flask app and scheduler
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# WebSocket Route for Real-Time Stock Tracking
+@socketio.on("track_stock")
+def track_stock(data):
+    track_stock_event(data)  # Delegate the tracking logic to the utility function
 
 # Polygon.io API Key
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "swpC4ge5_aGqdJll3gplZ6a40ADuwhzG")
@@ -86,19 +94,36 @@ def preprocess_data_with_indicators(data):
     data["price_change"] = (data["c"] - data["o"]) / data["o"]
     data["volatility"] = (data["h"] - data["l"]) / data["l"]
     data["sentiment_score"] = data["T"].apply(lambda x: analyze_sentiment(f"News headline for {x}"))
+
     if not data["c"].isnull().all():
+        # Calculate RSI
         rsi_indicator = RSIIndicator(close=data["c"], window=14, fillna=True)
         data["rsi"] = rsi_indicator.rsi()
+
+        # Calculate MACD
         macd = MACD(close=data["c"], window_slow=26, window_fast=12, window_sign=9, fillna=True)
         data["macd_diff"] = macd.macd_diff()
+
+        # Add SMA and EMA
         data["sma_20"] = data["c"].rolling(window=20).mean()
         data["ema_20"] = data["c"].ewm(span=20).mean()
+
+        # Add Bollinger Bands
         data["bb_upper"] = data["sma_20"] + 2 * data["c"].rolling(window=20).std()
         data["bb_lower"] = data["sma_20"] - 2 * data["c"].rolling(window=20).std()
+
+        # Add MACD Zero Check
+        data["macd_zero"] = (data["macd_diff"] == 0.0).astype(int)  # Flag rows where macd_diff is 0.0
+
     else:
-        data.update({"rsi": 0, "macd_diff": 0, "sma_20": 0, "ema_20": 0, "bb_upper": 0, "bb_lower": 0})
+        # Fill zeros if no valid data
+        data.update({"rsi": 0, "macd_diff": 0, "sma_20": 0, "ema_20": 0, "bb_upper": 0, "bb_lower": 0, "macd_zero": 0})
+
+    # Calculate volume surge
     data["volume_surge"] = data["volume"] / data["volume"].rolling(window=5).mean()
+
     return data.fillna(0)
+
 
 # Train XGBoost Model
 def train_xgboost_model():
@@ -126,6 +151,17 @@ def stock_performance():
         # Fetch performance details using the utility function
         stock_data = fetch_stock_performance(ticker, POLYGON_API_KEY)
         return jsonify(stock_data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+# API Route for Real-Time Stock Data
+@app.route('/api/live-data', methods=['GET'])
+def live_data():
+    try:
+        ticker = request.args.get("ticker")
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is missing"}), 400
+        live_data = fetch_live_stock_data(ticker)
+        return jsonify(live_data), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -238,4 +274,4 @@ def sentiment_plot():
 
 
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    socketio.run(app, port=5000, debug=True)

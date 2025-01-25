@@ -7,14 +7,18 @@
 }
 
 .chart-container {
-  width: 100%; /* Ensure it takes the full width of the parent */
-  max-width: 1400px; /* Increase max width to make it wider */
-  height: 500px; /* Adjust height if needed */
-  margin: 0 auto; /* Center it horizontally */
+  width: 100%; /* Full width of its parent */
+  height: 100%; /* Full height of its parent */
+  max-width: 100%; /* Prevent overflow */
+  max-height: 100%; /* Prevent overflow */
   display: flex;
   justify-content: center;
   align-items: center;
+  border: 1px solid #ccc; /* Optional, for layout debugging */
+  border-radius: 8px;
+  overflow: hidden;
 }
+
 
 
 .widget-container {

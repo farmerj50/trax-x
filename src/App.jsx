@@ -1,8 +1,13 @@
 import React, { useState } from "react";
+import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
 import Navbar from "./components/Navbar";
 import StockScanner from "./components/StockScanner";
 import SearchForm from "./components/SearchForm";
 import TickerNewsWidget from "./components/TickerNewsWidget";
+import StocksPage from "./components/StocksPage";
+import OptionsPage from "./components/OptionsPage";
+import CryptoPage from "./components/CryptoPage";
+import ShortSalesPage from "./components/ShortSalesPage";
 import "./App.css";
 
 const App = () => {
@@ -44,39 +49,64 @@ const App = () => {
   };
 
   return (
-    <>
+    <Router>
       {/* Navigation Menu */}
       <div className="menu-bar">
         <h1 className="menu-title">AI Stock Scanner</h1>
         <div className="menu-buttons">
-          <button>Stocks</button>
-          <button>Options</button>
-          <button>Crypto</button>
-          <button>Short Sales</button>
+          <Link to="/">
+            <button>Home</button>
+          </Link>
+          <Link to="/stocks">
+            <button>Stocks</button>
+          </Link>
+          <Link to="/options">
+            <button>Options</button>
+          </Link>
+          <Link to="/crypto">
+            <button>Crypto</button>
+          </Link>
+          <Link to="/short-sales">
+            <button>Short Sales</button>
+          </Link>
         </div>
       </div>
 
-      {/* Main Layout */}
-      <div className="app-layout">
-        {/* Search Form */}
-        <div className="search-bar">
-          <SearchForm onSearch={fetchStocks} />
-        </div>
+      {/* Define Routes */}
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <>
+              {/* Home (AI Stock Scanner) */}
+              <div className="app-layout">
+                {/* Search Form */}
+                <div className="search-bar">
+                  <SearchForm onSearch={fetchStocks} />
+                </div>
 
-        {/* Stock Results Header */}
-        <div className="stock-results-header">
-          <h2>Stock Results</h2>
-        </div>
+                {/* Stock Results Header */}
+                <div className="stock-results-header">
+                  <h2>Stock Results</h2>
+                </div>
 
-        {/* Main Content */}
-        <div className="main-content">
-          <StockScanner stocks={stocks} />
-          <div className="news-widget">
-            <TickerNewsWidget tickers={tickers} />
-          </div>
-        </div>
-      </div>
-    </>
+                {/* Main Content */}
+                <div className="main-content">
+                  <StockScanner stocks={stocks} />
+                  <div className="news-widget">
+                    <TickerNewsWidget tickers={tickers} />
+                  </div>
+                </div>
+              </div>
+            </>
+          }
+        />
+        <Route path="/stocks" element={<StocksPage />} />
+        <Route path="/options" element={<OptionsPage />} />
+        <Route path="/crypto" element={<CryptoPage />} />
+        <Route path="/short-sales" element={<ShortSalesPage />} />
+      </Routes>
+    </Router>
   );
 };
 

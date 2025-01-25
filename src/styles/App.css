@@ -36,10 +36,13 @@
 /* Main Content */
 .main-content {
   display: flex;
-  gap: 20px;
+  flex-direction: row; /* Ensures horizontal alignment */
+  gap: 20px; /* Adds space between child elements */
   justify-content: space-between;
   align-items: stretch; /* Ensures both columns are the same height */
+  
 }
+
 /* Stock List */
 .stock-list {
   display: flex;
@@ -202,4 +205,34 @@ label {
   background-color: #0056b3; /* Darker blue on hover */
   color: #ffffff; /* White text on hover */
 }
+.chart-container-stock-page {
+  width: 100%; /* Full width of the container */
+  height: 100%; /* Full height of the container */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  /* border: 1px solid #ccc;
+  border-radius: 10px; */
+  /* overflow: hidden; */
+  background-color: #f9f9f9;
+}
+
+.chart-section {
+  flex: 3;
+  display: flex; /* Use flex to center content */
+  justify-content: center;
+  align-items: center;
+  /* border: 1px solid #ccc;
+  border-radius: 10px; */
+  padding: 0; /* Remove padding to allow the chart to use full space */
+  background-color: #fff;
+  height: 400px; /* Set height based on requirement */
+  width: 700px;
+}
+
+.chart-section .chart-container {
+  width: 100%; /* Ensure the chart takes full width */
+  height: 100%; /* Ensure the chart takes full height */
+}
+
 
