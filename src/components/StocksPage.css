@@ -86,6 +86,17 @@ body, html, #root {
   padding: 5px 0; /* Padding for cleaner layout */
   z-index: 10; /* Ensure it appears above other elements */
 }
+/* Style the legend items as plain text */
+.custom-legend-text {
+  cursor: pointer;
+  color: #007bff; /* Text color */
+  text-decoration: underline; /* Make it appear clickable */
+}
+
+.custom-legend-text:hover {
+  color: #0056b3; /* Darker shade on hover */
+  text-decoration: none; /* Optional: Remove underline on hover */
+}
 
 
 
