@@ -8,8 +8,8 @@ import {
   StockChartComponent,
   StockChartSeriesCollectionDirective,
   StockChartSeriesDirective,
-  StockChartIndicatorsDirective,
-  StockChartIndicatorDirective,
+  AnnotationsDirective,
+  AnnotationDirective,
   Inject,
   DateTime,
   Tooltip,
@@ -29,8 +29,6 @@ import {
   MacdIndicator,
   StochasticIndicator,
   RsiIndicator,
-  AnnotationsDirective,
-  AnnotationDirective,
 } from "@syncfusion/ej2-react-charts";
 
 // Initialize WebSocket connection
@@ -42,8 +40,8 @@ const StocksPage = () => {
   const [chartData, setChartData] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [selectedIndicator, setSelectedIndicator] = useState("BollingerBands");
   const [recommendations, setRecommendations] = useState([]);
+  const [scannedStocks, setScannedStocks] = useState([]); // For scanned stock data
 
   const periods = [
     { intervalType: "Months", interval: 1, text: "1M" },
@@ -60,15 +58,27 @@ const StocksPage = () => {
       const response = await fetch(
         `http://localhost:5000/api/candlestick?ticker=${tickerSymbol}`
       );
+      if (!response.ok) throw new Error("Failed to fetch chart data.");
+
       const data = await response.json();
-      if (data.dates) {
-        const formattedData = data.dates.map((date, index) => ({
-          x: new Date(date),
-          open: data.open[index],
-          high: data.high[index],
-          low: data.low[index],
-          close: data.close[index],
-        }));
+      if (data && data.dates) {
+        const formattedData = data.dates
+          .map((date, index) => ({
+            x: new Date(date),
+            open: data.open[index],
+            high: data.high[index],
+            low: data.low[index],
+            close: data.close[index],
+          }))
+          .filter(
+            (entry) =>
+              entry.x &&
+              !isNaN(entry.open) &&
+              !isNaN(entry.high) &&
+              !isNaN(entry.low) &&
+              !isNaN(entry.close)
+          ); // Filter valid data
+
         setChartData(formattedData);
         setError("");
       } else {
@@ -78,38 +88,68 @@ const StocksPage = () => {
     } catch (err) {
       console.error("Error fetching chart data:", err);
       setChartData([]);
-      setError("Failed to load chart data.");
+      setError(err.message || "Failed to load chart data.");
     } finally {
       setLoading(false);
     }
   };
 
+  // Fetch scanned stock data
+  const fetchScannedStocks = async () => {
+    try {
+      const response = await fetch("/api/scan-stocks");
+      if (!response.ok) throw new Error("Failed to fetch scanned stocks.");
+
+      const data = await response.json();
+      console.log("Scanned stocks data:", data);
+      setScannedStocks(data.candidates || []);
+    } catch (err) {
+      console.error("Error fetching scanned stocks:", err);
+      setScannedStocks([]);
+    }
+  };
+
+  // Fetch chart data when selected ticker changes
   useEffect(() => {
     fetchChartData(selectedTicker);
   }, [selectedTicker]);
 
+  // Fetch scanned stocks on page load
+  useEffect(() => {
+    fetchScannedStocks();
+  }, []);
+
   // WebSocket Listener for Real-Time Updates
   useEffect(() => {
-    socket.emit("track_stock", { ticker: selectedTicker });
-
-    socket.on("stock_update", (data) => {
+    const handleStockUpdate = (data) => {
       console.log("Real-time data:", data);
 
-      // Update chart data with live price
-      setChartData((prevData) => [
-        ...prevData,
-        { x: new Date(data.timestamp), open: data.price, high: data.price, low: data.price, close: data.price },
-      ]);
+      if (data && data.price && data.timestamp) {
+        setChartData((prevData) => [
+          ...prevData,
+          {
+            x: new Date(data.timestamp),
+            open: data.price,
+            high: data.price,
+            low: data.price,
+            close: data.price,
+          },
+        ]);
 
-      // Update recommendations
-      setRecommendations((prev) => [
-        ...prev,
-        { timestamp: data.timestamp, recommendation: data.recommendation },
-      ]);
-    });
+        setRecommendations((prev) => [
+          ...prev,
+          { timestamp: data.timestamp, recommendation: data.recommendation || "Hold" },
+        ]);
+      } else {
+        console.warn("Invalid WebSocket data received:", data);
+      }
+    };
+
+    socket.emit("track_stock", { ticker: selectedTicker });
+    socket.on("stock_update", handleStockUpdate);
 
     return () => {
-      socket.disconnect();
+      socket.off("stock_update", handleStockUpdate);
     };
   }, [selectedTicker]);
 
@@ -183,7 +223,7 @@ const StocksPage = () => {
           <p style={{ textAlign: "center", color: "gray" }}>Loading...</p>
         ) : error ? (
           <p style={{ color: "red", textAlign: "center" }}>{error}</p>
-        ) : (
+        ) : chartData && chartData.length > 0 ? (
           <ErrorBoundary>
             <StockChartComponent
               id="stockchart"
@@ -254,6 +294,26 @@ const StocksPage = () => {
               </AnnotationsDirective>
             </StockChartComponent>
           </ErrorBoundary>
+        ) : (
+          <p style={{ textAlign: "center", color: "gray" }}>No data available.</p>
+        )}
+      </div>
+
+      <div
+        className="scanned-stocks"
+        style={{ marginTop: "20px", padding: "10px", backgroundColor: "#f9f9f9", borderRadius: "8px" }}
+      >
+        <h3>Scanned Stocks</h3>
+        {scannedStocks.length === 0 ? (
+          <p>No stocks found.</p>
+        ) : (
+          <ul>
+            {scannedStocks.map((stock, index) => (
+              <li key={index}>
+                <strong>{stock.ticker}</strong> - Close Price: ${stock.c}
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </div>
