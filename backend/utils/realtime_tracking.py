@@ -67,7 +67,20 @@ def fetch_live_stock_data(ticker):
         }
     except requests.exceptions.RequestException as e:
         raise ValueError(f"Error fetching live stock data for {ticker}: {e}")
+def track_stock_event(data):
+    """Handle real-time stock tracking and emit WebSocket event."""
+    ticker = data.get("ticker")
+    if not ticker:
+        return emit("error", {"message": "Ticker is missing."})
 
+    try:
+        # Fetch real-time stock data
+        live_data = fetch_live_stock_data(ticker)
+
+        # Emit real-time stock update
+        emit("stock_update", live_data)
+    except Exception as e:
+        emit("error", {"message": str(e)})
 # Preprocess Live Data
 def preprocess_live_data(price, volume, sentiment_score):
     """Prepare real-time data for AI/ML prediction."""

@@ -36,11 +36,10 @@
 /* Main Content */
 .main-content {
   display: flex;
-  flex-direction: row; /* Ensures horizontal alignment */
-  gap: 20px; /* Adds space between child elements */
+  flex-direction: row;
+  gap: 20px;
   justify-content: space-between;
-  align-items: stretch; /* Ensures both columns are the same height */
-  
+  align-items: stretch;
 }
 
 /* Stock List */
@@ -62,29 +61,13 @@
 
 /* News Widget */
 .news-widget {
-  flex: 1; /* Adjusts width dynamically relative to stock-scanner */
+  flex: 1;
   padding: 20px;
   background-color: #fff;
-  border: none; /* Removed the border */
+  border: none;
   border-radius: 8px;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   overflow-y: auto;
-}
-
-.news-widget h4 {
-  font-size: 18px;
-  font-weight: bold;
-  margin-bottom: 15px;
-  text-align: center;
-}
-
-.news-section {
-  margin-bottom: 15px;
-}
-
-.news-section h5 {
-  font-size: 16px;
-  font-weight: bold;
 }
 
 /* Additional Styling for Uniformity */
@@ -94,6 +77,7 @@ body {
   padding: 0;
   background-color: #f8f8f8;
   color: #333;
+  transition: background 0.3s ease, color 0.3s ease; /* Smooth transition */
 }
 
 button {
@@ -122,14 +106,6 @@ label {
   margin-right: 10px;
 }
 
-/* Flexbox Adjustments */
-.search-bar,
-.stock-results,
-.main-content {
-  width: 100%;
-  box-sizing: border-box;
-}
-
 /* Scrollbar Styling */
 .news-widget::-webkit-scrollbar {
   width: 8px;
@@ -143,20 +119,23 @@ label {
 .news-widget::-webkit-scrollbar-thumb:hover {
   background-color: #aaa;
 }
+
 /* Stock Results Header */
 .stock-results-header {
-  width: 100%; /* Make it span across the full width */
-  text-align: center; /* Center the text */
-  background-color: #f1f1f1; /* Light gray background */
-  padding: 15px; /* Add spacing */
-  border: 1px solid #ddd; /* Border for a defined structure */
-  border-radius: 8px; /* Rounded corners */
-  font-size: 20px; /* Larger font size */
-  font-weight: bold; /* Make the text bold */
-  color: #333; /* Darker text color */
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow */
-  margin: 20px 0; /* Space above and below the header */
+  width: 100%;
+  text-align: center;
+  background-color: #f1f1f1;
+  padding: 15px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 20px;
+  font-weight: bold;
+  color: #333;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  margin: 20px 0;
 }
+
+/* Stock Scanner */
 .stock-scanner {
   flex: 2;
   display: flex;
@@ -164,17 +143,18 @@ label {
   gap: 20px;
   padding: 20px;
   background-color: #fff;
-  border: none; /* Removed the border */
+  border: none;
   border-radius: 8px;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
-/* Menu Bar Styling */
+
+/* Menu Bar */
 .menu-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background-color: #007bff; /* Blue background */
-  color: #ffffff; /* White text */
+  background-color: #007bff;
+  color: #ffffff;
   padding: 15px 20px;
   position: sticky;
   top: 0;
@@ -190,8 +170,8 @@ label {
 }
 
 .menu-buttons button {
-  background-color: #ffffff; /* White background for buttons */
-  color: #007bff; /* Blue text for buttons */
+  background-color: #ffffff;
+  color: #007bff;
   border: none;
   border-radius: 5px;
   padding: 10px 15px;
@@ -202,37 +182,85 @@ label {
 }
 
 .menu-buttons button:hover {
-  background-color: #0056b3; /* Darker blue on hover */
-  color: #ffffff; /* White text on hover */
+  background-color: #0056b3;
+  color: #ffffff;
 }
+
+/* Chart Container for Stock Page */
 .chart-container-stock-page {
-  width: 100%; /* Full width of the container */
-  height: 100%; /* Full height of the container */
+  width: 100%;
+  height: 100%;
   display: flex;
   justify-content: center;
   align-items: center;
-  /* border: 1px solid #ccc;
-  border-radius: 10px; */
-  /* overflow: hidden; */
   background-color: #f9f9f9;
 }
 
-.chart-section {
-  flex: 3;
-  display: flex; /* Use flex to center content */
-  justify-content: center;
-  align-items: center;
-  /* border: 1px solid #ccc;
-  border-radius: 10px; */
-  padding: 0; /* Remove padding to allow the chart to use full space */
-  background-color: #fff;
-  height: 400px; /* Set height based on requirement */
-  width: 700px;
+/* ============================= */
+/* DARK MODE */
+/* ============================= */
+
+/* Applies Dark Mode */
+body.dark-mode {
+  background-color: #121212;
+  color: #e0e0e0;
 }
 
-.chart-section .chart-container {
-  width: 100%; /* Ensure the chart takes full width */
-  height: 100%; /* Ensure the chart takes full height */
+/* Dark Mode Elements */
+.dark-mode .chart-container-stock-page,
+.dark-mode .news-widget,
+.dark-mode .stock-card,
+.dark-mode .stock-results,
+.dark-mode .menu-bar {
+  background-color: #1e1e1e;
+  border-color: #444;
+  color: #e0e0e0;
 }
 
+.dark-mode .menu-bar {
+  background-color: #222;
+  color: #fff;
+}
 
+.dark-mode .stock-results-header {
+  background-color: #1e1e1e;
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+/* Dark Mode Buttons */
+.dark-mode button {
+  background-color: #333;
+  color: #e0e0e0;
+}
+
+.dark-mode button:hover {
+  background-color: #555;
+  color: #fff;
+}
+
+/* Dark Mode Chart Container */
+.dark-mode .chart-container {
+  background-color: #1e1e1e;
+  border-color: #444;
+  color: #e0e0e0;
+}
+
+/* Syncfusion Chart Dark Mode */
+.dark-mode .e-chart {
+  background-color: #121212 !important;
+}
+
+/* Dark Mode Scrollbars */
+.dark-mode .news-widget::-webkit-scrollbar-thumb {
+  background-color: #555;
+}
+
+.dark-mode .news-widget::-webkit-scrollbar-thumb:hover {
+  background-color: #777;
+}
+
+/* Dark Mode Transition */
+.dark-mode {
+  transition: background 0.3s ease, color 0.3s ease;
+}

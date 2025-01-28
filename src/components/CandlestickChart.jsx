@@ -19,6 +19,9 @@ registerLicense("Ngo9BigBOggjHTQxAR8/V1NMaF5cXmRCf1FpRmJGdld5fUVHYVZUTXxaS00DNHV
 const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageType }) => {
   const [chartData, setChartData] = useState([]);
   const [error, setError] = useState("");
+  const [darkMode, setDarkMode] = useState(
+    window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+  );
 
   useEffect(() => {
     const fetchChartData = async () => {
@@ -58,12 +61,21 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageT
     fetchChartData();
   }, [ticker]);
 
+  // Detect system dark mode changes
+  useEffect(() => {
+    const darkModeListener = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleDarkModeChange = (e) => setDarkMode(e.matches);
+    darkModeListener.addEventListener("change", handleDarkModeChange);
+
+    return () => darkModeListener.removeEventListener("change", handleDarkModeChange);
+  }, []);
+
   // Chart size based on page type
   const chartHeight = pageType === "stocksPage" ? "100%" : "400px";
   const chartWidth = pageType === "stocksPage" ? "100%" : "100%";
 
   return (
-    <div className="chart-container">
+    <div className={`chart-container ${darkMode ? "dark-mode" : ""}`}>
       {error ? (
         <p style={{ color: "red", textAlign: "center" }}>{error}</p>
       ) : (
@@ -76,7 +88,8 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageT
           zoomSettings={{ enableMouseWheelZooming: true, mode: "XY" }}
           height={chartHeight}
           width={chartWidth}
-          legendSettings={{ visible: true }} // ✅ Enables the Legend
+          legendSettings={{ visible: true }}
+          background={darkMode ? "#121212" : "#ffffff"} // ✅ Dark mode background
         >
           <Inject services={[CandleSeries, DateTime, Tooltip, Zoom, Crosshair, Legend]} />
           <SeriesCollectionDirective>
@@ -88,7 +101,8 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageT
               low="low"
               close="close"
               type="Candle"
-              name={ticker} // ✅ Name for legend
+              name={ticker}
+              animation={{ enable: true, duration: 1000, delay: 200 }} // ✅ Smooth animations
             />
           </SeriesCollectionDirective>
         </ChartComponent>
