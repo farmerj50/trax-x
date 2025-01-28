@@ -26,3 +26,5 @@ venv/
 venv/Lib/site-packages/xgboost/lib/xgboost.dll
  Scripts/*
  Includes/*
+ numpy.py
+

@@ -405,20 +405,68 @@ def live_data():
 @app.route('/api/candlestick', methods=['GET'])
 def candlestick_chart():
     try:
+        # Get ticker parameter
         ticker = request.args.get('ticker')
         if not ticker:
             return jsonify({"error": "Ticker parameter is missing"}), 400
+
         print(f"Fetching candlestick data for ticker: {ticker}")
+
+        # Define date range (last 180 days)
         end_date = datetime.today()
         start_date = end_date - timedelta(days=180)
-        url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}?adjusted=true&sort=asc&apiKey={POLYGON_API_KEY}"
+
+        # Construct API request URL
+        url = (
+            f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/"
+            f"{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}?"
+            f"adjusted=true&sort=asc&apiKey={POLYGON_API_KEY}"
+        )
+
+        # Fetch data from Polygon API
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
+
+        # If no data available, return an empty response (previous behavior)
         if "results" not in data or not data["results"]:
-            return jsonify({"error": f"No data available for ticker {ticker}"}), 404
+            print(f"Warning: No candlestick data found for ticker {ticker}. Returning empty response.")
+            return jsonify({
+                "dates": [],
+                "open": [],
+                "high": [],
+                "low": [],
+                "close": []
+            }), 200  # Ensures frontend does not break
+
+        # Convert results to DataFrame
         results = pd.DataFrame(data["results"])
+
+        # Ensure required columns exist; if missing, default to empty lists
+        return jsonify({
+            "dates": results["t"].apply(lambda x: datetime.utcfromtimestamp(x / 1000).strftime('%Y-%m-%d')).tolist() if "t" in results else [],
+            "open": results["o"].tolist() if "o" in results else [],
+            "high": results["h"].tolist() if "h" in results else [],
+            "low": results["l"].tolist() if "l" in results else [],
+            "close": results["c"].tolist() if "c" in results else [],
+        }), 200
+
+    except requests.exceptions.Timeout:
+        print(f"Timeout while fetching data for {ticker}")
+        return jsonify({"error": "External API request timed out"}), 504
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data for {ticker}: {e}")
+        return jsonify({"error": "External API error"}), 500
+
+    except Exception as e:
+        print(f"Unexpected error processing ticker {ticker}: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+        # Fill any missing values with defaults
         results.fillna(0, inplace=True)
+
+        # Format and return candlestick data
         return jsonify({
             "dates": results["t"].apply(lambda x: datetime.utcfromtimestamp(x / 1000).strftime('%Y-%m-%d')).tolist(),
             "open": results["o"].tolist(),
@@ -426,8 +474,19 @@ def candlestick_chart():
             "low": results["l"].tolist(),
             "close": results["c"].tolist(),
         }), 200
+
+    except requests.exceptions.Timeout:
+        print(f"Timeout occurred while fetching data for ticker: {ticker}")
+        return jsonify({"error": "Request to external API timed out"}), 504
+
+    except requests.exceptions.RequestException as e:
+        print(f"Request error for ticker {ticker}: {e}")
+        return jsonify({"error": "Error fetching data from external API"}), 500
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Unexpected error for ticker {ticker}: {e}")
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+
 @app.route("/api/ticker-news", methods=["GET"])
 def ticker_news():
     tickers = request.args.get("ticker")  # Expect comma-separated tickers

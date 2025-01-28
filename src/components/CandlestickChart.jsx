@@ -9,6 +9,7 @@ import {
   Tooltip,
   Zoom,
   Crosshair,
+  Legend,
 } from "@syncfusion/ej2-react-charts";
 import { registerLicense } from "@syncfusion/ej2-base";
 
@@ -20,25 +21,33 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageT
   const [error, setError] = useState("");
 
   useEffect(() => {
-    // Fetch chart data for the specific ticker
     const fetchChartData = async () => {
       try {
         const response = await fetch(`http://localhost:5000/api/candlestick?ticker=${ticker}`);
         const data = await response.json();
 
-        if (data.dates) {
-          // Format the data for Syncfusion
-          const formattedData = data.dates.map((date, index) => ({
-            x: new Date(date),
-            open: data.open[index],
-            high: data.high[index],
-            low: data.low[index],
-            close: data.close[index],
+        if (data.dates && Array.isArray(data.dates) && data.dates.length > 0) {
+          // Get today's date to filter out future dates
+          const today = new Date().toISOString().split("T")[0];
+
+          // Filter out future dates
+          const filteredDates = data.dates.filter((date) => date <= today);
+          const indexMap = data.dates
+            .map((date, index) => (date <= today ? index : null))
+            .filter((x) => x !== null);
+
+          const formattedData = indexMap.map((i) => ({
+            x: new Date(data.dates[i]),
+            open: data.open[i],
+            high: data.high[i],
+            low: data.low[i],
+            close: data.close[i],
           }));
+
           setChartData(formattedData);
-          setError("");
+          setError(""); // Reset error if successful
         } else {
-          setError("No data available for this stock.");
+          setError("No valid historical data available for this stock.");
         }
       } catch (err) {
         console.error(`Error fetching data for ${ticker}:`, err);
@@ -49,13 +58,12 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageT
     fetchChartData();
   }, [ticker]);
 
-  // Conditional height and width based on pageType
+  // Chart size based on page type
   const chartHeight = pageType === "stocksPage" ? "100%" : "400px";
   const chartWidth = pageType === "stocksPage" ? "100%" : "100%";
 
   return (
     <div className="chart-container">
-      {/* Render error if data fetch fails */}
       {error ? (
         <p style={{ color: "red", textAlign: "center" }}>{error}</p>
       ) : (
@@ -66,10 +74,11 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageT
           tooltip={{ enable: true }}
           crosshair={{ enable: true, lineType: "Both" }}
           zoomSettings={{ enableMouseWheelZooming: true, mode: "XY" }}
-          height={chartHeight} // Dynamic height
-          width={chartWidth} // Dynamic width
+          height={chartHeight}
+          width={chartWidth}
+          legendSettings={{ visible: true }} // ✅ Enables the Legend
         >
-          <Inject services={[CandleSeries, DateTime, Tooltip, Zoom, Crosshair]} />
+          <Inject services={[CandleSeries, DateTime, Tooltip, Zoom, Crosshair, Legend]} />
           <SeriesCollectionDirective>
             <SeriesDirective
               dataSource={chartData}
@@ -79,6 +88,7 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageT
               low="low"
               close="close"
               type="Candle"
+              name={ticker} // ✅ Name for legend
             />
           </SeriesCollectionDirective>
         </ChartComponent>
@@ -93,8 +103,8 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageT
           <p><strong>RSI:</strong> {additionalData?.rsi || "N/A"}</p>
         </div>
         <div className="price-info">
-          <p><strong>Entry Point:</strong> ${entryPoint.toFixed(2)}</p>
-          <p><strong>Exit Point:</strong> ${exitPoint.toFixed(2)}</p>
+          <p><strong>Entry Point:</strong> ${entryPoint?.toFixed(2) || "N/A"}</p>
+          <p><strong>Exit Point:</strong> ${exitPoint?.toFixed(2) || "N/A"}</p>
         </div>
       </div>
     </div>

@@ -1,45 +1,79 @@
+/* Parent container layout for charts and widgets */
 .parent-container {
   display: flex; /* Flex layout for side-by-side arrangement */
-  width: 100%; /* Take full width of the UI */
+  width: 100%; /* Full width of the UI */
   max-width: 1200px; /* Optional: Constrain max width */
   margin: 0 auto; /* Center the container */
   gap: 20px; /* Space between chart and widget */
+  flex-wrap: wrap; /* Wrap elements for responsiveness */
 }
 
+/* Main candlestick chart container */
 .chart-container {
-  width: 100%; /* Full width of its parent */
-  height: 100%; /* Full height of its parent */
-  max-width: 100%; /* Prevent overflow */
-  max-height: 100%; /* Prevent overflow */
+  flex: 2; /* Gives the chart more space */
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  min-height: 400px;
   display: flex;
   justify-content: center;
   align-items: center;
-  border: 1px solid #ccc; /* Optional, for layout debugging */
+  border: 1px solid #ccc; /* Optional, for debugging */
   border-radius: 8px;
   overflow: hidden;
+  background-color: #ffffff; /* White background */
+  padding: 10px; /* Adds spacing around the chart */
 }
 
+/* Legend positioning for Syncfusion chart */
+.chart-container .e-chart-legend {
+  position: absolute;
+  bottom: 10px; /* Adjust legend position */
+  left: 50%;
+  transform: translateX(-50%);
+}
 
-
+/* Widget container for additional data */
 .widget-container {
-  flex: 1; /* Widget occupies 1 part of the available space */
+  flex: 1; /* Widget takes 1 part of the space */
   background-color: #ffffff;
   border: 2px solid #ccc;
   border-radius: 8px;
   padding: 20px;
   box-sizing: border-box;
   display: flex;
-  flex-direction: column; /* Stack widget content vertically */
-  justify-content: center; /* Center the content */
-  height: 400px; /* Match the height of the chart */
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
 }
+
+/* Sentiment chart styling */
 .sentiment-chart-container {
-  flex: 1; /* Sentiment chart occupies 1 part of the available space */
-  height: 500px; /* Match the height of the chart */
+  flex: 1;
+  height: 500px;
   border: 1px solid #ccc;
   border-radius: 8px;
   background-color: #f9f9f9;
   display: flex;
   justify-content: center;
   align-items: center;
+}
+
+/* Responsive behavior */
+@media screen and (max-width: 768px) {
+  .parent-container {
+    flex-direction: column; /* Stack on smaller screens */
+    align-items: center;
+  }
+
+  .chart-container {
+    width: 100%;
+    height: auto;
+  }
+
+  .widget-container {
+    width: 100%;
+    margin-top: 20px;
+  }
 }

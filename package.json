@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "@syncfusion/ej2-react-charts": "^28.1.37",
+    "@syncfusion/ej2-react-charts": "^28.1.41",
     "@syncfusion/ej2-react-dropdowns": "^28.1.41",
     "@testing-library/jest-dom": "^5.17.0",
     "@testing-library/react": "^13.4.0",
