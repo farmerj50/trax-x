@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
 import Navbar from "./components/Navbar";
 import StockScanner from "./components/StockScanner";
@@ -13,6 +13,19 @@ import "./App.css";
 const App = () => {
   const [stocks, setStocks] = useState([]);
   const [tickers, setTickers] = useState([]);
+
+  // Dark Mode State: Use localStorage or system preference
+  const storedTheme = localStorage.getItem("theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const initialTheme = storedTheme || (prefersDark ? "dark" : "light");
+
+  const [theme, setTheme] = useState(initialTheme);
+
+  useEffect(() => {
+    // Apply dark mode class to the body
+    document.body.classList.toggle("dark-mode", theme === "dark");
+    localStorage.setItem("theme", theme);
+  }, [theme]);
 
   const fetchStocks = async (criteria) => {
     try {
@@ -51,24 +64,17 @@ const App = () => {
   return (
     <Router>
       {/* Navigation Menu */}
-      <div className="menu-bar">
+      <div className={`menu-bar ${theme}`}>
         <h1 className="menu-title">AI Stock Scanner</h1>
         <div className="menu-buttons">
-          <Link to="/">
-            <button>Home</button>
-          </Link>
-          <Link to="/stocks">
-            <button>Stocks</button>
-          </Link>
-          <Link to="/options">
-            <button>Options</button>
-          </Link>
-          <Link to="/crypto">
-            <button>Crypto</button>
-          </Link>
-          <Link to="/short-sales">
-            <button>Short Sales</button>
-          </Link>
+          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+            {theme === "dark" ? "Light Mode" : "Dark Mode"}
+          </button>
+          <Link to="/"><button>Home</button></Link>
+          <Link to="/stocks"><button>Stocks</button></Link>
+          <Link to="/options"><button>Options</button></Link>
+          <Link to="/crypto"><button>Crypto</button></Link>
+          <Link to="/short-sales"><button>Short Sales</button></Link>
         </div>
       </div>
 
@@ -77,28 +83,25 @@ const App = () => {
         <Route
           path="/"
           element={
-            <>
-              {/* Home (AI Stock Scanner) */}
-              <div className="app-layout">
-                {/* Search Form */}
-                <div className="search-bar">
-                  <SearchForm onSearch={fetchStocks} />
-                </div>
+            <div className={`app-layout ${theme}`}>
+              {/* Search Form */}
+              <div className="search-bar">
+                <SearchForm onSearch={fetchStocks} />
+              </div>
 
-                {/* Stock Results Header */}
-                <div className="stock-results-header">
-                  <h2>Stock Results</h2>
-                </div>
+              {/* Stock Results Header */}
+              <div className="stock-results-header">
+                <h2>Stock Results</h2>
+              </div>
 
-                {/* Main Content */}
-                <div className="main-content">
-                  <StockScanner stocks={stocks} />
-                  <div className="news-widget">
-                    <TickerNewsWidget tickers={tickers} />
-                  </div>
+              {/* Main Content */}
+              <div className="main-content">
+                <StockScanner stocks={stocks} />
+                <div className="news-widget">
+                  <TickerNewsWidget tickers={tickers} />
                 </div>
               </div>
-            </>
+            </div>
           }
         />
         <Route path="/stocks" element={<StocksPage />} />

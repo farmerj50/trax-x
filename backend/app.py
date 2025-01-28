@@ -16,6 +16,15 @@ from flask_socketio import SocketIO
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
+from ta.volume import OnBalanceVolumeIndicator
+from ta.momentum import WilliamsRIndicator
+from ta.trend import EMAIndicator
+from ta.volatility import BollingerBands
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import GridSearchCV
+from joblib import dump, load
+from tensorflow.keras.models import save_model, load_model
+import joblib
 
 # Import utility functions
 from utils.scheduler import initialize_scheduler
@@ -28,6 +37,9 @@ from utils.realtime_tracking import track_stock_event, fetch_live_stock_data
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
+# Ensure models/ directory exists
+if not os.path.exists("models"):
+    os.makedirs("models")
 # Cache for models
 lstm_cache = {"model": None, "scaler": None}
 
@@ -42,6 +54,305 @@ analyzer = SentimentIntensityAnalyzer()
 
 # Caching (TTLCache)
 historical_data_cache = TTLCache(maxsize=10, ttl=300)
+
+# Function to fetch historical data
+@cached(historical_data_cache)
+def fetch_historical_data():
+    """
+    Fetch historical stock data from Polygon.io.
+    The function will try the most recent 7 days and return the first available data.
+    Caches the result to reduce repeated API calls.
+    """
+    for i in range(7):  # Attempt to fetch data for the last 7 days
+        most_recent_date = datetime.utcnow() - timedelta(days=i)
+        most_recent_date_str = most_recent_date.strftime("%Y-%m-%d")
+        print(f"Attempting to fetch stock data for: {most_recent_date_str}")
+        
+        # Construct API URL
+        url = (
+            f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/"
+            f"{most_recent_date_str}?adjusted=true&apiKey={POLYGON_API_KEY}"
+        )
+        
+        try:
+            # Make API request
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            data = response.json()
+
+            # Validate response content
+            if "results" in data and data["results"]:
+                print(f"Data fetched successfully for {most_recent_date_str}")
+                return pd.DataFrame(data["results"])
+            else:
+                print(f"No data found for {most_recent_date_str}")
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching data for {most_recent_date_str}: {e}")
+
+    # If no data was fetched for the past 7 days, raise an error
+    raise ValueError("Unable to fetch stock data for any recent trading day.")
+
+# Function to analyze sentiment
+def analyze_sentiment(text):
+    sentiment = analyzer.polarity_scores(text)
+    return sentiment["compound"]
+
+
+def preprocess_data_with_indicators(data):
+    """
+    Add volume, sentiment score, and enhanced technical indicators.
+    """
+    try:
+        # Rename columns for consistency
+        data.rename(columns={"v": "volume"}, inplace=True)
+
+        # Calculate basic metrics
+        data["price_change"] = (data["c"] - data["o"]) / data["o"]
+        data["volatility"] = (data["h"] - data["l"]) / data["l"]
+
+        # Volume Surge Calculation
+        data["volume_surge"] = data["volume"] / data["volume"].rolling(window=5).mean()
+
+        # ✅ **Fix for analyze_sentiment missing error**
+        if "T" in data.columns:
+            data["sentiment_score"] = data["T"].apply(lambda x: analyze_sentiment(str(x)) if isinstance(x, str) else 0)
+        else:
+            print("Warning: 'T' column missing. Setting sentiment score to 0.")
+            data["sentiment_score"] = 0
+
+        # Add Technical Indicators
+        if not data["c"].isnull().all():
+            rsi_indicator = RSIIndicator(close=data["c"], window=14, fillna=True)
+            data["rsi"] = rsi_indicator.rsi()
+
+            macd = MACD(close=data["c"], window_slow=26, window_fast=12, window_sign=9, fillna=True)
+            data["macd_diff"] = macd.macd_diff()
+
+            data["sma_20"] = data["c"].rolling(window=20).mean()
+
+            bb = BollingerBands(close=data["c"], window=20, fillna=True)
+            data["bollinger_upper"] = bb.bollinger_hband()
+            data["bollinger_lower"] = bb.bollinger_lband()
+
+        # Handle Missing Values
+        data.fillna(0, inplace=True)
+
+        return data
+
+    except Exception as e:
+        print(f"Error in preprocess_data_with_indicators: {e}")
+        raise
+
+
+# Train XGBoost model
+def train_xgboost_model():
+    try:
+        # Fetch and preprocess data
+        data = fetch_historical_data()
+        data = preprocess_data_with_indicators(data)
+
+        # Define the feature set dynamically
+        features = [
+            col for col in [
+                "price_change", "volatility", "volume", "volume_surge",
+                "obv", "williams_r", "ema_50", "ema_200",
+                "bollinger_upper", "bollinger_lower", "vwap"
+            ] if col in data.columns
+        ]
+
+        if not features:
+            raise ValueError("No valid features available for training the model.")
+
+        # Define target
+        data["target"] = (data["h"] >= data["c"] * 1.05).astype(int)  # Example target condition
+
+        # Train-test split
+        X_train, X_test, y_train, y_test = train_test_split(
+            data[features], data["target"], test_size=0.2, random_state=42
+        )
+
+        # Initialize and train the XGBoost model
+        model = XGBClassifier()
+        model.fit(X_train, y_train)
+
+        # Print evaluation metrics
+        print("Model Evaluation:")
+        print(classification_report(y_test, model.predict(X_test)))
+
+        # Save the model
+        dump(model, "models/xgb_model.joblib")  # Save in models folder
+        print("[DEBUG] XGBoost model trained and saved successfully.")
+
+        return model, features
+
+    except KeyError as e:
+        print(f"KeyError in train_xgboost_model: {e}")
+        raise
+
+    except Exception as e:
+        print(f"Error in train_xgboost_model: {e}")
+        raise
+# Function to preprocess data with enhanced indicators
+# After fetch_historical_data
+def train_and_cache_lstm_model():
+    """
+    Train the LSTM model and cache it for future use.
+    """
+    try:
+        # Fetch and preprocess historical data
+        data = fetch_historical_data()
+        data = preprocess_data_with_indicators(data)
+
+        # Define features and target
+        features = ["price_change", "volatility", "volume", "sentiment_score"]
+        target = "c"  # Target column (e.g., closing price)
+
+        # Train the LSTM model
+        model, scaler = train_lstm_model(data, features, target)
+
+        # Ensure models directory exists
+        models_dir = "models"
+        os.makedirs(models_dir, exist_ok=True)
+
+        # ✅ Save Model & Scaler
+        lstm_model_path = os.path.join(models_dir, "lstm_model.keras")
+        scaler_path = os.path.join(models_dir, "lstm_scaler.pkl")
+
+        save_model(model, lstm_model_path)  # Save model in new Keras format
+        joblib.dump(scaler, scaler_path)
+
+        # ✅ Debug: Print Paths
+        print(f"✅ Model saved at: {lstm_model_path}")
+        print(f"✅ Scaler saved at: {scaler_path}")
+
+        # ✅ Verify If Files Exist
+        if os.path.exists(lstm_model_path) and os.path.exists(scaler_path):
+            print("✅ LSTM model and scaler successfully saved in the models/ directory.")
+        else:
+            print("❌ ERROR: Model files are missing even after saving!")
+
+        # ✅ Cache Model
+        lstm_cache["model"] = model
+        lstm_cache["scaler"] = scaler
+
+        return model, scaler
+
+    except Exception as e:
+        print(f"❌ Error training and saving LSTM model: {e}")
+        raise
+# Load XGBoost model if it exists, otherwise train it
+# Load LSTM model if it exists, otherwise train it
+lstm_model_path = "C:\\Users\\gabby\\trax-x\\backend\\models\\lstm_model.keras"
+scaler_path = "C:\\Users\\gabby\\trax-x\\backend\\models\\lstm_scaler.pkl"
+
+if os.path.exists(lstm_model_path) and os.path.exists(scaler_path):
+    try:
+        lstm_cache["model"] = load_model(lstm_model_path)
+        lstm_cache["scaler"] = joblib.load(scaler_path)
+        print("✅ LSTM model loaded successfully.")
+    except Exception as e:
+        print(f"❌ ERROR loading LSTM model: {e}")
+        lstm_cache["model"], lstm_cache["scaler"] = train_and_cache_lstm_model()
+else:
+    print("⚠️ LSTM model not found. Training a new one...")
+    lstm_cache["model"], lstm_cache["scaler"] = train_and_cache_lstm_model()
+    
+# Define API routes below
+@app.route('/api/train-xgboost', methods=['POST'])
+def train_xgboost_endpoint():
+    """
+    API endpoint to manually train the XGBoost model.
+    """
+    try:
+        global xgb_model, feature_columns
+        xgb_model, feature_columns = train_xgboost_model()
+        return jsonify({"message": "XGBoost model trained and saved successfully."}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/scan-stocks', methods=['GET'])
+def scan_stocks():
+    try:
+        # Parse user inputs
+        min_price = float(request.args.get("min_price", 0))
+        max_price = float(request.args.get("max_price", float("inf")))
+        volume_surge = float(request.args.get("volume_surge", 1.2))
+        min_rsi = float(request.args.get("min_rsi", 0))
+        max_rsi = float(request.args.get("max_rsi", 100))
+
+        print(f"Scan stocks request params: min_price={min_price}, max_price={max_price}, volume_surge={volume_surge}, min_rsi={min_rsi}, max_rsi={max_rsi}")
+
+        # Fetch and preprocess data
+        data = fetch_historical_data()
+        print("Fetched historical data:", data.head())
+
+        data = preprocess_data_with_indicators(data)
+        print("Processed data with indicators:", data.head())
+
+        # Apply user-defined filters
+        filtered_data = data[
+            (data["c"] >= min_price) & 
+            (data["c"] <= max_price) & 
+            (data["volume_surge"] > volume_surge) & 
+            (data["rsi"] >= min_rsi) & 
+            (data["rsi"] <= max_rsi)
+        ]
+        print("Data after applying user-defined filters:", filtered_data.head())
+
+        if filtered_data.empty:
+            print("No data matching filters.")
+            return jsonify({"candidates": []}), 200
+
+        # Step 1: Apply XGBoost Predictions
+        filtered_data["xgboost_prediction"] = xgb_model.predict(filtered_data[feature_columns])
+        xgb_filtered_data = filtered_data[filtered_data["xgboost_prediction"] == 1]
+        print("Data after XGBoost filtering:", xgb_filtered_data.head())
+
+        if xgb_filtered_data.empty:
+            print("No data matching XGBoost predictions.")
+            return jsonify({"candidates": []}), 200
+
+        # Step 2: Ensure LSTM is Trained and Cached
+        if not lstm_cache["model"] or not lstm_cache["scaler"]:
+            return jsonify({"error": "LSTM model is not trained. Please train the model using /api/train-lstm before scanning stocks."}), 500
+
+        # Check if sufficient data exists for LSTM prediction
+        if len(xgb_filtered_data) < 50:
+            print(f"Insufficient data for LSTM prediction: {len(xgb_filtered_data)} rows.")
+            return jsonify({"candidates": xgb_filtered_data.head(20).to_dict(orient="records")}), 200
+
+        # Step 3: Apply LSTM Predictions
+        xgb_filtered_data["next_day_prediction"] = xgb_filtered_data.apply(
+            lambda row: predict_next_day(
+                model=lstm_cache["model"],
+                recent_data=xgb_filtered_data,
+                scaler=lstm_cache["scaler"],
+                features=["price_change", "volatility", "volume", "sentiment_score"]
+            ),
+            axis=1
+        )
+        print("Data with LSTM predictions:", xgb_filtered_data.head())
+
+        # Step 4: Combine Predictions with Weighted Scores
+        xgb_weight = 0.7  # Weight for XGBoost
+        lstm_weight = 0.3  # Weight for LSTM
+        xgb_filtered_data["combined_score"] = (
+            (xgb_weight * xgb_filtered_data["xgboost_prediction"]) +
+            (lstm_weight * (xgb_filtered_data["next_day_prediction"] / xgb_filtered_data["c"]))
+        )
+        print("Data with combined scores:", xgb_filtered_data.head())
+
+        # Step 5: Sort and Limit Results
+        top_candidates = xgb_filtered_data.sort_values("combined_score", ascending=False).head(20)
+        print("Top 20 candidates:", top_candidates)
+
+        # Return filtered candidates
+        return jsonify({"candidates": top_candidates.to_dict(orient="records")}), 200
+
+    except Exception as e:
+        print(f"Error in scan-stocks endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # Function to preprocess data for LSTM
 def preprocess_for_lstm(data, features, target, time_steps=50):
@@ -98,133 +409,66 @@ def predict_next_day(model, recent_data, scaler, features):
     return prediction
 
 
-# Function to fetch historical data
-@cached(historical_data_cache)
-def fetch_historical_data():
-    """
-    Fetch historical stock data from Polygon.io.
-    The function will try the most recent 7 days and return the first available data.
-    Caches the result to reduce repeated API calls.
-    """
-    for i in range(7):  # Attempt to fetch data for the last 7 days
-        most_recent_date = datetime.utcnow() - timedelta(days=i)
-        most_recent_date_str = most_recent_date.strftime("%Y-%m-%d")
-        print(f"Attempting to fetch stock data for: {most_recent_date_str}")
-        
-        # Construct API URL
-        url = (
-            f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/"
-            f"{most_recent_date_str}?adjusted=true&apiKey={POLYGON_API_KEY}"
-        )
-        
-        try:
-            # Make API request
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()  # Raise an exception for HTTP errors
-            data = response.json()
-
-            # Validate response content
-            if "results" in data and data["results"]:
-                print(f"Data fetched successfully for {most_recent_date_str}")
-                return pd.DataFrame(data["results"])
-            else:
-                print(f"No data found for {most_recent_date_str}")
-
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching data for {most_recent_date_str}: {e}")
-
-    # If no data was fetched for the past 7 days, raise an error
-    raise ValueError("Unable to fetch stock data for any recent trading day.")
-
-
-# Function to analyze sentiment
-def analyze_sentiment(text):
-    sentiment = analyzer.polarity_scores(text)
-    return sentiment["compound"]
-
 # Function to preprocess data with enhanced indicators
-# After `fetch_historical_data`
-
-def preprocess_data_with_indicators(data):
+# After fetch_historical_data
+def train_and_cache_lstm_model():
     """
-    Add volume, sentiment score, and enhanced technical indicators.
+    Train the LSTM model and cache it for future use.
     """
     try:
-        # Rename columns for consistency
-        data.rename(columns={"v": "volume"}, inplace=True)
+        # Fetch and preprocess historical data
+        data = fetch_historical_data()
+        data = preprocess_data_with_indicators(data)
 
-        # Calculate basic metrics
-        data["price_change"] = (data["c"] - data["o"]) / data["o"]  # Percentage change
-        data["volatility"] = (data["h"] - data["l"]) / data["l"]    # High-Low spread
+        # Define features and target
+        features = ["price_change", "volatility", "volume", "sentiment_score"]
+        target = "c"  # Target column (e.g., closing price)
 
-        # Volume Surge Calculation
-        if "volume" in data.columns:
-            data["volume_surge"] = data["volume"] / data["volume"].rolling(window=5).mean()
+        # Train the LSTM model
+        model, scaler = train_lstm_model(data, features, target)
+
+        # Ensure models directory exists
+        models_dir = "models"
+        os.makedirs(models_dir, exist_ok=True)
+
+        # ✅ Save Model & Scaler
+        lstm_model_path = os.path.join(models_dir, "lstm_model.keras")
+        scaler_path = os.path.join(models_dir, "lstm_scaler.pkl")
+
+        save_model(model, lstm_model_path)  # Save model in new Keras format
+        joblib.dump(scaler, scaler_path)
+
+        # ✅ Debug: Print Paths
+        print(f"✅ Model saved at: {lstm_model_path}")
+        print(f"✅ Scaler saved at: {scaler_path}")
+
+        # ✅ Verify If Files Exist
+        if os.path.exists(lstm_model_path) and os.path.exists(scaler_path):
+            print("✅ LSTM model and scaler successfully saved in the models/ directory.")
         else:
-            print("Warning: 'volume' column missing. Defaulting volume_surge to 1.0.")
-            data["volume_surge"] = 1.0
+            print("❌ ERROR: Model files are missing even after saving!")
 
-        # Sentiment Score Calculation
-        if "T" in data.columns:
-            data["sentiment_score"] = data["T"].apply(
-                lambda x: analyze_sentiment(f"News headline for {x}") if isinstance(x, str) else 0
-            )
-        else:
-            print("Warning: 'T' column missing. Sentiment score set to 0.")
-            data["sentiment_score"] = 0
+        # ✅ Cache Model
+        lstm_cache["model"] = model
+        lstm_cache["scaler"] = scaler
 
-        # Add Technical Indicators
-        if not data["c"].isnull().all():
-            # Relative Strength Index (RSI)
-            rsi_indicator = RSIIndicator(close=data["c"], window=14, fillna=True)
-            data["rsi"] = rsi_indicator.rsi()
-
-            # Moving Average Convergence Divergence (MACD)
-            macd = MACD(close=data["c"], window_slow=26, window_fast=12, window_sign=9, fillna=True)
-            data["macd_diff"] = macd.macd_diff()
-
-            # Simple Moving Average (SMA)
-            data["sma_20"] = data["c"].rolling(window=20).mean()
-
-            # Bollinger Bands (requires `sma_20`)
-            data["bollinger_upper"] = data["sma_20"] + (data["c"].rolling(window=20).std() * 2)
-            data["bollinger_lower"] = data["sma_20"] - (data["c"].rolling(window=20).std() * 2)
-
-            # Exponential Moving Average (EMA)
-            data["ema_20"] = data["c"].ewm(span=20, adjust=False).mean()
-
-            # Average True Range (ATR)
-            data["atr"] = (data["h"] - data["l"]).rolling(window=14).mean()
-
-        # Handle Missing Values
-        data.fillna(0, inplace=True)
-
-        # Debug Output
-        debug_columns = [
-            "price_change", "volatility", "volume_surge",
-            "rsi", "macd_diff", "sma_20", "ema_20",
-            "bollinger_upper", "bollinger_lower", "atr"
-        ]
-        print(f"Data shape after preprocessing: {data.shape}")
-        print("Preview of added indicators:", data[debug_columns].head())
-
-        return data
+        return model, scaler
 
     except Exception as e:
-        print(f"Error in preprocess_data_with_indicators: {e}")
+        print(f"❌ Error training and saving LSTM model: {e}")
         raise
+@app.route('/api/train-lstm', methods=['POST'])
+def train_lstm_endpoint():
+    """
+    API endpoint to train the LSTM model and cache it.
+    """
+    try:
+        train_and_cache_lstm_model()
+        return jsonify({"message": "LSTM model trained and cached successfully."}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# Train XGBoost model
-def train_xgboost_model():
-    data = fetch_historical_data()
-    data = preprocess_data_with_indicators(data)
-    data["target"] = (data["h"] >= data["c"] * 1.05).astype(int)
-    features = ["price_change", "volatility", "volume", "sentiment_score"]
-    X_train, X_test, y_train, y_test = train_test_split(data[features], data["target"], test_size=0.2, random_state=42)
-    model = XGBClassifier()
-    model.fit(X_train, y_train)
-    print("Model Evaluation:", classification_report(y_test, model.predict(X_test)))
-    return model, features
+
 
 # Train both models
 data = fetch_historical_data()
@@ -260,132 +504,52 @@ def lstm_predict():
         print(f"Error in lstm-predict endpoint: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/scan-stocks', methods=['GET'])
-def scan_stocks():
-    try:
-        # Parse user inputs
-        min_price = float(request.args.get("min_price", 0))
-        max_price = float(request.args.get("max_price", float("inf")))
-        volume_surge = float(request.args.get("volume_surge", 1.2))
-        min_rsi = float(request.args.get("min_rsi", 0))
-        max_rsi = float(request.args.get("max_rsi", 100))
 
-        print(f"Scan stocks request params: min_price={min_price}, max_price={max_price}, volume_surge={volume_surge}, min_rsi={min_rsi}, max_rsi={max_rsi}")
 
-        # Fetch and preprocess data
-        data = fetch_historical_data()
-        print("Fetched historical data:", data.head())
-
-        data = preprocess_data_with_indicators(data)
-        print("Processed data with indicators:", data.head())
-
-        # Apply user-defined filters
-        filtered_data = data[
-            (data["c"] >= min_price) &
-            (data["c"] <= max_price) &
-            (data["volume_surge"] > volume_surge) &
-            (data["rsi"] >= min_rsi) &
-            (data["rsi"] <= max_rsi)
-        ]
-        print("Data after applying user-defined filters:", filtered_data.head())
-
-        if filtered_data.empty:
-            print("No data matching filters.")
-            return jsonify({"candidates": []}), 200
-
-        # Step 1: Apply XGBoost Predictions
-        filtered_data["xgboost_prediction"] = xgb_model.predict(filtered_data[feature_columns])
-        xgb_filtered_data = filtered_data[filtered_data["xgboost_prediction"] == 1]
-        print("Data after XGBoost filtering:", xgb_filtered_data.head())
-
-        if xgb_filtered_data.empty:
-            print("No data matching XGBoost predictions.")
-            return jsonify({"candidates": []}), 200
-
-        # Step 2: Train LSTM if not already cached
-        if not lstm_cache["model"] or not lstm_cache["scaler"]:
-            print("Training LSTM model...")
-            lstm_cache["model"], lstm_cache["scaler"] = train_lstm_model(
-                data=data,
-                features=["price_change", "volatility", "volume", "sentiment_score"],
-                target="c"
-            )
-        else:
-            print("Using cached LSTM model...")
-
-        # Check if sufficient data exists for LSTM prediction
-        if len(xgb_filtered_data) < 50:
-            print(f"Insufficient data for LSTM prediction: {len(xgb_filtered_data)} rows.")
-            return jsonify({"candidates": xgb_filtered_data.head(20).to_dict(orient="records")}), 200
-
-        # Step 3: Apply LSTM Predictions
-        xgb_filtered_data["next_day_prediction"] = xgb_filtered_data.apply(
-            lambda row: predict_next_day(
-                model=lstm_cache["model"],
-                recent_data=xgb_filtered_data,
-                scaler=lstm_cache["scaler"],
-                features=["price_change", "volatility", "volume", "sentiment_score"]
-            ),
-            axis=1
-        )
-        print("Data with LSTM predictions:", xgb_filtered_data.head())
-
-        # Step 4: Combine Predictions with Weighted Scores
-        xgb_weight = 0.7  # Weight for XGBoost
-        lstm_weight = 0.3  # Weight for LSTM
-        xgb_filtered_data["combined_score"] = (
-            (xgb_weight * xgb_filtered_data["xgboost_prediction"]) +
-            (lstm_weight * (xgb_filtered_data["next_day_prediction"] / xgb_filtered_data["c"]))
-        )
-        print("Data with combined scores:", xgb_filtered_data.head())
-
-        # Step 5: Sort and Limit Results
-        top_candidates = xgb_filtered_data.sort_values("combined_score", ascending=False).head(20)
-        print("Top 20 candidates:", top_candidates)
-
-        # Return filtered candidates
-        return jsonify({"candidates": top_candidates.to_dict(orient="records")}), 200
-
-    except Exception as e:
-        print(f"Error in scan-stocks endpoint: {e}")
-        return jsonify({"error": str(e)}), 500
 
 def preprocess_data_with_indicators(data):
-    """Add volume, sentiment score, and enhanced technical indicators."""
-    data.rename(columns={"v": "volume"}, inplace=True)
-    data["price_change"] = (data["c"] - data["o"]) / data["o"]
-    data["volatility"] = (data["h"] - data["l"]) / data["l"]
+    """
+    Add volume, sentiment score, and advanced technical indicators.
+    """
+    try:
+        # Rename volume column
+        data.rename(columns={"v": "volume"}, inplace=True)
 
-    # Ensure volume column exists before calculating volume_surge
-    if "volume" in data.columns:
+        # Basic Calculations
+        data["price_change"] = (data["c"] - data["o"]) / data["o"]  
+        data["volatility"] = (data["h"] - data["l"]) / data["l"]
+
+        # Volume Surge
         data["volume_surge"] = data["volume"] / data["volume"].rolling(window=5).mean()
-    else:
-        print("Warning: 'volume' column is missing. Setting default volume_surge=1.0")
-        data["volume_surge"] = 1.0  # Default value if volume is missing
 
-    # Safeguard for missing or invalid 'T' column
-    if "T" in data.columns:
-        data["sentiment_score"] = data["T"].apply(
-            lambda x: analyze_sentiment(f"News headline for {x}") if isinstance(x, str) else 0
-        )
-    else:
-        print("Warning: 'T' column is missing. Sentiment score set to 0.")
-        data["sentiment_score"] = 0
+        # On-Balance Volume (OBV)
+        obv_indicator = OnBalanceVolumeIndicator(close=data["c"], volume=data["volume"], fillna=True)
+        data["obv"] = obv_indicator.on_balance_volume()
 
-    # Add RSI, MACD, and other indicators
-    if not data["c"].isnull().all():
-        rsi_indicator = RSIIndicator(close=data["c"], window=14, fillna=True)
-        data["rsi"] = rsi_indicator.rsi()
+        # Williams %R
+        williams_r = WilliamsRIndicator(high=data["h"], low=data["l"], close=data["c"], lbp=14, fillna=True)
+        data["williams_r"] = williams_r.williams_r()
 
-        macd = MACD(close=data["c"], window_slow=26, window_fast=12, window_sign=9, fillna=True)
-        data["macd_diff"] = macd.macd_diff()
+        # Exponential Moving Average (EMA)
+        data["ema_50"] = EMAIndicator(close=data["c"], window=50, fillna=True).ema_indicator()
+        data["ema_200"] = EMAIndicator(close=data["c"], window=200, fillna=True).ema_indicator()
 
-        # Add more indicators as required
-        data["sma_20"] = data["c"].rolling(window=20).mean()
-        data["ema_20"] = data["c"].ewm(span=20).mean()
+        # Bollinger Bands
+        bb = BollingerBands(close=data["c"], window=20, fillna=True)
+        data["bollinger_upper"] = bb.bollinger_hband()
+        data["bollinger_lower"] = bb.bollinger_lband()
 
-    # Fill missing values to avoid NaN issues
-    data.fillna(0, inplace=True)
+        # Volume Weighted Average Price (VWAP)
+        data["vwap"] = (data["volume"] * (data["h"] + data["l"] + data["c"]) / 3).cumsum() / data["volume"].cumsum()
+
+        # Handle Missing Values
+        data.fillna(0, inplace=True)
+
+        return data
+
+    except Exception as e:
+        print(f"Error in preprocess_data_with_indicators: {e}")
+        raise
 
     # Debug output
     print("Data after adding indicators:", data.head())
