@@ -93,6 +93,13 @@ const StocksPage = () => {
     fetchChartData(selectedTicker);
   }, [selectedTicker]);
 
+  useEffect(() => {
+    console.log("🔄 Chart Data Updated:", chartData);
+    if (!chartData || chartData.length === 0) {
+      console.warn("⚠ Chart Data is empty. Avoiding Syncfusion render.");
+    }
+  }, [chartData]);
+
   const handleSearch = () => {
     if (ticker.trim() !== "") {
       setSelectedTicker(ticker.toUpperCase());
@@ -120,7 +127,7 @@ const StocksPage = () => {
           <p style={{ textAlign: "center", color: "gray" }}>Loading...</p>
         ) : error ? (
           <p style={{ color: "red", textAlign: "center" }}>{error}</p>
-        ) : chartData.length > 0 ? ( // Ensure chartData is checked for length
+        ) : chartData && chartData.length > 0 ? ( // Ensure chartData is not null
           <ErrorBoundary>
             <StockChartComponent
               id="stockchart"
