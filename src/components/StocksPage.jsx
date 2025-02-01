@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import ErrorBoundary from "./ErrorBoundary";
 import StockTracker from "./StockTracker";
-import io from "socket.io-client";
+import LiveStockUpdate from "./LiveStockUpdate";
+import AddTicker from "./AddTicker";
 import "./StocksPage.css";
 
 import {
@@ -29,14 +30,17 @@ import {
   RsiIndicator,
 } from "@syncfusion/ej2-react-charts";
 
-const socket = io("http://localhost:5000");
+const POLYGON_WS_URL = "wss://delayed.polygon.io/stocks"; // 15-min delayed data
+const POLYGON_API_KEY = process.env.REACT_APP_POLYGON_API_KEY;
 
 const StocksPage = () => {
   const [ticker, setTicker] = useState("");
   const [selectedTicker, setSelectedTicker] = useState("AAPL");
-  const [chartData, setChartData] = useState([]); // Ensure chartData defaults to an empty array
+  const [chartData, setChartData] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [livePrice, setLivePrice] = useState(null);
+  const [ws, setWs] = useState(null);
 
   const periods = [
     { intervalType: "Months", interval: 1, text: "1M" },
@@ -46,7 +50,7 @@ const StocksPage = () => {
     { intervalType: "Years", interval: 3, text: "All" },
   ];
 
-  // Fetch historical chart data
+  /** Fetch Historical Chart Data */
   const fetchChartData = async (tickerSymbol) => {
     setLoading(true);
     try {
@@ -57,27 +61,18 @@ const StocksPage = () => {
 
       const data = await response.json();
       if (data && data.dates && data.dates.length > 0) {
-        const formattedData = data.dates
-          .map((date, index) => ({
-            x: new Date(date),
-            open: data.open[index],
-            high: data.high[index],
-            low: data.low[index],
-            close: data.close[index],
-          }))
-          .filter(
-            (entry) =>
-              entry.x &&
-              !isNaN(entry.open) &&
-              !isNaN(entry.high) &&
-              !isNaN(entry.low) &&
-              !isNaN(entry.close)
-          );
+        const formattedData = data.dates.map((date, index) => ({
+          x: new Date(date),
+          open: data.open[index],
+          high: data.high[index],
+          low: data.low[index],
+          close: data.close[index],
+        }));
 
         setChartData(formattedData);
         setError("");
       } else {
-        setChartData([]); // Ensure chartData is reset if no data is available
+        setChartData([]);
         setError("No data available for the selected ticker.");
       }
     } catch (err) {
@@ -89,16 +84,57 @@ const StocksPage = () => {
     }
   };
 
+  /** Handle Live WebSocket Updates */
+  const handleWebSocketMessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    data.forEach((update) => {
+      if (update.ev === "AM" && update.sym === selectedTicker) {
+        console.log("📡 Received WebSocket Update:", update);
+        setLivePrice(update.c);
+
+        // Update chart with latest minute aggregate close price
+        setChartData((prevData) => {
+          if (prevData.length === 0) return prevData;
+          const newData = [...prevData];
+          newData[newData.length - 1] = {
+            ...newData[newData.length - 1],
+            close: update.c, // Update only close price
+          };
+          return newData;
+        });
+      }
+    });
+  };
+
+  /** Setup WebSocket Connection */
+  const setupWebSocket = () => {
+    if (ws) {
+      ws.close(); // Close existing connection
+    }
+
+    const websocket = new WebSocket(POLYGON_WS_URL);
+    websocket.onopen = () => {
+      console.log("✅ Connected to Polygon.io WebSocket");
+      websocket.send(JSON.stringify({ action: "auth", params: POLYGON_API_KEY }));
+      websocket.send(JSON.stringify({ action: "subscribe", params: `AM.${selectedTicker}` }));
+    };
+
+    websocket.onmessage = handleWebSocketMessage;
+    websocket.onerror = (err) => console.error("❌ WebSocket Error:", err);
+    websocket.onclose = () => console.log("⚠ WebSocket Disconnected");
+
+    setWs(websocket);
+  };
+
+  /** Effect: Fetch Chart Data on Ticker Change */
   useEffect(() => {
     fetchChartData(selectedTicker);
+    setupWebSocket();
+    return () => {
+      if (ws) ws.close();
+    };
   }, [selectedTicker]);
-
-  useEffect(() => {
-    console.log("🔄 Chart Data Updated:", chartData);
-    if (!chartData || chartData.length === 0) {
-      console.warn("⚠ Chart Data is empty. Avoiding Syncfusion render.");
-    }
-  }, [chartData]);
 
   const handleSearch = () => {
     if (ticker.trim() !== "") {
@@ -110,6 +146,11 @@ const StocksPage = () => {
     <div className="stocks-page" style={{ padding: "20px" }}>
       <div className="stock-header">
         <h2 style={{ textAlign: "center" }}>{selectedTicker} Stock Analysis</h2>
+        {livePrice !== null && (
+          <p style={{ textAlign: "center", fontSize: "18px", fontWeight: "bold", color: "green" }}>
+            Live Price: ${livePrice.toFixed(2)}
+          </p>
+        )}
       </div>
 
       <div className="search-stock">
@@ -122,76 +163,22 @@ const StocksPage = () => {
         <button onClick={handleSearch}>Search</button>
       </div>
 
-      <div id="chart-container">
-        {loading ? (
-          <p style={{ textAlign: "center", color: "gray" }}>Loading...</p>
-        ) : error ? (
-          <p style={{ color: "red", textAlign: "center" }}>{error}</p>
-        ) : chartData && chartData.length > 0 ? ( // Ensure chartData is not null
-          <ErrorBoundary>
-            <StockChartComponent
-              id="stockchart"
-              enableSelector={true}
-              primaryXAxis={{
-                valueType: "DateTime",
-                labelFormat: "MMM dd",
-                majorGridLines: { width: 0 },
-                intervalType: "Days",
-                crosshairTooltip: { enable: true },
-              }}
-              primaryYAxis={{
-                labelFormat: "${value}",
-                majorGridLines: { width: 0 },
-                rangePadding: "None",
-                crosshairTooltip: { enable: true },
-              }}
-              tooltip={{ enable: true }}
-              crosshair={{ enable: true }}
-              periods={periods}
-              title={`${selectedTicker} Stock Analysis`}
-              height="100%"
-              width="100%"
-            >
-              <Inject
-                services={[
-                  DateTime,
-                  Tooltip,
-                  RangeTooltip,
-                  Crosshair,
-                  LineSeries,
-                  CandleSeries,
-                  Legend,
-                  Export,
-                  EmaIndicator,
-                  TmaIndicator,
-                  SmaIndicator,
-                  MomentumIndicator,
-                  AtrIndicator,
-                  AccumulationDistributionIndicator,
-                  BollingerBands,
-                  MacdIndicator,
-                  StochasticIndicator,
-                  RsiIndicator,
-                ]}
-              />
-              <StockChartSeriesCollectionDirective>
-                <StockChartSeriesDirective
-                  dataSource={chartData}
-                  xName="x"
-                  open="open"
-                  high="high"
-                  low="low"
-                  close="close"
-                  type="Candle"
-                  animation={{ enable: true }}
-                />
-              </StockChartSeriesCollectionDirective>
-            </StockChartComponent>
-          </ErrorBoundary>
-        ) : (
-          <p style={{ textAlign: "center", color: "gray" }}>No data available.</p>
-        )}
-      </div>
+      <AddTicker />
+      <LiveStockUpdate ticker={selectedTicker} />
+
+      <StockChartComponent
+        id="stockchart"
+        primaryXAxis={{ valueType: "DateTime", labelFormat: "MMM dd" }}
+        primaryYAxis={{ labelFormat: "${value}" }}
+        tooltip={{ enable: true }}
+        crosshair={{ enable: true }}
+        periods={periods}
+      >
+        <Inject services={[DateTime, Tooltip, RangeTooltip, Crosshair, LineSeries, CandleSeries, Legend, Export, EmaIndicator, TmaIndicator, SmaIndicator, MomentumIndicator, AtrIndicator, AccumulationDistributionIndicator, BollingerBands, MacdIndicator, StochasticIndicator, RsiIndicator]} />
+        <StockChartSeriesCollectionDirective>
+          <StockChartSeriesDirective dataSource={chartData} xName="x" open="open" high="high" low="low" close="close" type="Candle" animation={{ enable: true }} />
+        </StockChartSeriesCollectionDirective>
+      </StockChartComponent>
     </div>
   );
 };

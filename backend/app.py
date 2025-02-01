@@ -14,8 +14,8 @@ from datetime import datetime, timedelta
 from cachetools import TTLCache, cached
 from flask_socketio import SocketIO
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.models import Sequential # type: ignore
+from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, Bidirectional, Conv1D, Attention, GlobalAveragePooling1D, LeakyReLU, MultiHeadAttention # type: ignore
 from ta.volume import OnBalanceVolumeIndicator
 from ta.momentum import WilliamsRIndicator
 from ta.trend import EMAIndicator
@@ -23,8 +23,15 @@ from ta.volatility import BollingerBands
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.model_selection import GridSearchCV
 from joblib import dump, load
-from tensorflow.keras.models import save_model, load_model
+from tensorflow.keras.models import save_model, load_model # type: ignore
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau # type: ignore
+from sklearn.preprocessing import MinMaxScaler
 import joblib
+from tensorflow.keras.layers import BatchNormalization, GlobalAveragePooling1D, LeakyReLU, LayerNormalization # type: ignore
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.optimizers import Adam # type: ignore
+import time
+from threading import Thread
 
 # Import utility functions
 from utils.scheduler import initialize_scheduler
@@ -37,6 +44,8 @@ from utils.realtime_tracking import track_stock_event, fetch_live_stock_data
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+tickers = set()
 # Ensure models/ directory exists
 if not os.path.exists("models"):
     os.makedirs("models")
@@ -354,32 +363,124 @@ def scan_stocks():
         print(f"Error in scan-stocks endpoint: {e}")
         return jsonify({"error": str(e)}), 500
 
-# Function to preprocess data for LSTM
-def preprocess_for_lstm(data, features, target, time_steps=50):
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    data_scaled = scaler.fit_transform(data[features])
+# Function to preprocess data for LSTM with additional features
+from ta.momentum import RSIIndicator
 
+def preprocess_for_lstm(data, features, target, time_steps=150):
+    # Ensure RSI is computed before smoothing
+    if "rsi" not in data.columns:
+        rsi_indicator = RSIIndicator(close=data["c"], window=14, fillna=True)
+        data["rsi"] = rsi_indicator.rsi()
+
+    # Compute rolling mean for sentiment score to smooth fluctuations
+    data["sentiment_score_avg"] = data["sentiment_score"].rolling(window=10).mean().fillna(0)
+    data["rsi_smooth"] = data["rsi"].rolling(window=5).mean().fillna(0)
+    data["macd_smooth"] = data["macd_diff"].rolling(window=5).mean().fillna(0)
+    
+    # Normalize features using StandardScaler
+    scaler = StandardScaler()
+    data_scaled = scaler.fit_transform(data[features])
+    
     X, y = [], []
     for i in range(time_steps, len(data_scaled)):
         X.append(data_scaled[i - time_steps:i])
         y.append(data[target].iloc[i])
+    
     return np.array(X), np.array(y), scaler
 
-# Function to train LSTM model
-def train_lstm_model(data, features, target, time_steps=50):
+# Function to fetch live stock data dynamically
+def fetch_live_stock_data(ticker):
+    #POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "YOUR_API_KEY")
+    url = f"https://api.polygon.io/v2/last/nbbo/{ticker}?apiKey={POLYGON_API_KEY}"
+    
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+
+        # Extracting price from response
+        if "results" in data and "p" in data["results"]: 
+            return {"ticker": ticker, "price": data["results"]["p"]}
+        else:
+            print(f"❌ Error: No valid price data for {ticker}")
+            return {"ticker": ticker, "price": None}
+    
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error fetching live data: {e}")
+        return {"ticker": ticker, "price": None}
+
+# Function to emit live stock data dynamically
+def emit_live_stock_data():
+    tickers = set()  # Dynamically updated ticker list
+    while True:
+        for ticker in list(tickers):
+            live_data = fetch_live_stock_data(ticker)
+            if live_data["price"] is not None:
+                socketio.emit("stock_update", {"ticker": ticker, "price": live_data.get("price")})
+        time.sleep(5)  # Update every 10 seconds
+
+# API to dynamically add tickers for live tracking
+@app.route('/api/add_ticker', methods=['POST'])
+def add_ticker():
+    """
+    Add a new ticker to the live tracking set.
+    """
+    data = request.get_json()
+    ticker = data.get("ticker")
+    if ticker:
+        global tickers
+        tickers.add(ticker.upper())  # Convert to uppercase
+        return jsonify({"message": f"{ticker} added to live updates."}), 200
+    return jsonify({"error": "Ticker not provided."}), 400
+
+
+# Start live data streaming thread
+live_stock_thread = Thread(target=emit_live_stock_data, daemon=True)
+live_stock_thread.start()
+
+
+# Optimized LSTM Model with Attention, CNN, and deeper architecture
+def train_lstm_model(data, features, target, time_steps=150):
     X, y, scaler = preprocess_for_lstm(data, features, target, time_steps)
-
+    
     model = Sequential([
-        LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], X.shape[2])),
+        Conv1D(filters=128, kernel_size=5, activation=LeakyReLU(alpha=0.1), input_shape=(X.shape[1], X.shape[2])),
+        BatchNormalization(),
+        Dropout(0.3),
+        Dense(64, activation="relu"),
+        MultiHeadAttention(num_heads=4, key_dim=64),
+        LayerNormalization(),
+        Bidirectional(LSTM(256, return_sequences=True)),
+        BatchNormalization(),
+        Dropout(0.3),
+        Bidirectional(LSTM(128, return_sequences=True)),
+        BatchNormalization(),
+        Dropout(0.3),
+        LSTM(64, return_sequences=True),
+        GlobalAveragePooling1D(),
+        Dense(64, activation=LeakyReLU(alpha=0.1)),
         Dropout(0.2),
-        LSTM(units=50, return_sequences=False),
-        Dropout(0.2),
-        Dense(units=1)
+        Dense(32, activation="swish"),
+        Dense(1)
     ])
-
-    model.compile(optimizer="adam", loss="mean_squared_error")
-    model.fit(X, y, epochs=50, batch_size=32, validation_split=0.2, verbose=1)
+    
+    model.compile(optimizer=Adam(learning_rate=0.0001), loss="mean_squared_error")
+    
+    # Callbacks for early stopping and learning rate decay
+    early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5)
+    
+    model.fit(X, y, epochs=500, batch_size=128, validation_split=0.2, verbose=1,
+              callbacks=[early_stopping, reduce_lr])
+    
     return model, scaler
+# Function to pad sequences when data is insufficient
+def pad_sequences(data, required_length=150):
+    if len(data) < required_length:
+        pad_size = required_length - len(data)
+        padding = np.zeros((pad_size, data.shape[1]))
+        return np.vstack((padding, data))
+    return data
 
 # Function to predict the next day using LSTM
 def predict_next_day(model, recent_data, scaler, features):
@@ -396,7 +497,9 @@ def predict_next_day(model, recent_data, scaler, features):
     """
     # Ensure enough data for 50 time steps
     if len(recent_data) < 50:
-        raise ValueError(f"Insufficient data for LSTM prediction. Expected at least 50 rows, but got {len(recent_data)}.")
+     print(f"⚠️ Warning: Only {len(recent_data)} rows available. Proceeding with all available data.")
+     recent_data = pad_sequences(recent_data, required_length=50)
+
 
     # Scale the recent data
     recent_scaled = scaler.transform(recent_data[features].values[-50:])
