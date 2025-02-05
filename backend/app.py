@@ -32,13 +32,20 @@ from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.optimizers import Adam # type: ignore
 import time
 from threading import Thread
-
+import json
+import threading
+import websocket
 # Import utility functions
 from utils.scheduler import initialize_scheduler
 from utils.fetch_stock_performance import fetch_stock_performance
 from utils.fetch_ticker_news import fetch_ticker_news
 from utils.sentiment_plot import fetch_sentiment_trend, generate_sentiment_plot
 from utils.realtime_tracking import track_stock_event, fetch_live_stock_data
+from dotenv import load_dotenv  # ✅ Import dotenv
+
+# ✅ Load environment variables from .env file
+load_dotenv()
+print(os.getenv("ALPHA_VANTAGE_API_KEY"))
 
 # Initialize Flask app and SocketIO
 app = Flask(__name__)
@@ -53,55 +60,239 @@ if not os.path.exists("models"):
 lstm_cache = {"model": None, "scaler": None}
 
 
+# Polygon.io WebSocket URL (Delayed by 15 minutes)
+POLYGON_WS_URL = "wss://delayed.polygon.io/stocks"
 # Polygon.io API Key
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "swpC4ge5_aGqdJll3gplZ6a40ADuwhzG")
 if not POLYGON_API_KEY:
     raise ValueError("Polygon.io API key not found. Set POLYGON_API_KEY environment variable.")
 
+# Get Alpha Vantage API Key from Environment
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "3R7BUV52GH1MOHNO")
+
+if not ALPHA_VANTAGE_API_KEY:
+    raise ValueError("⚠️ Alpha Vantage API key not found. Set ALPHA_VANTAGE_API_KEY in .env file.")
+latest_stock_prices = {}  # Store the latest stock prices
+# Function to subscribe to tickers in WebSocket connection
+def subscribe_to_tickers(ws):
+    if tickers:
+        tickers_list = ",".join(tickers)
+        message = json.dumps({"action": "subscribe", "params": f"AM.{tickers_list}"})
+        ws.send(message)
+        print(f"📡 Subscribed to: {tickers_list}")
+
+# WebSocket event handlers
+def on_message(ws, message):
+    data = json.loads(message)
+    if isinstance(data, list):
+        for event in data:
+            if "sym" in event and "c" in event:
+                stock_data = {"ticker": event["sym"], "price": event["c"]}
+                latest_stock_prices[event["sym"]] = event["c"]  # Store the latest price
+                socketio.emit("stock_update", stock_data)
+                print(f"📊 Live Update: {stock_data}")
+
+def on_error(ws, error):
+    print(f"❌ WebSocket Error: {error}")
+
+def on_close(ws, close_status_code, close_msg):
+    print("🔌 WebSocket closed, reconnecting in 5 seconds...")
+    threading.Timer(5, start_websocket_thread).start()
+
+def on_open(ws):
+    subscribe_to_tickers(ws)
+
+# Start WebSocket connection
+def start_websocket_thread():
+    ws = websocket.WebSocketApp(
+        f"{POLYGON_WS_URL}?apiKey={POLYGON_API_KEY}",
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
+    ws.on_open = on_open
+    ws.run_forever()
+
+# API to dynamically add tickers for live tracking
+@app.route('/api/add_ticker', methods=['POST'])
+def add_ticker():
+    data = request.get_json()
+    ticker = data.get("ticker")
+    if ticker:
+        global tickers
+        tickers.add(ticker.upper())
+        subscribe_to_tickers(start_websocket_thread())  # Ensure real-time updates
+        return jsonify({"message": f"{ticker} added to live updates."}), 200
+    return jsonify({"error": "Ticker not provided."}), 400
+
+# API Route for Real-Time Stock Data
+@app.route('/api/live-data', methods=['GET'])
+def live_data():
+    try:
+        ticker = request.args.get("ticker")
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is missing"}), 400
+        price = latest_stock_prices.get(ticker.upper(), "No data yet")
+        return jsonify({"ticker": ticker, "price": price}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 # Initialize Sentiment Analyzer
 analyzer = SentimentIntensityAnalyzer()
+
+@app.route('/api/historical-data', methods=['GET'])
+def historical_data():
+    """
+    Fetch detailed historical intraday data for a selected stock using Alpha Vantage.
+    """
+    ticker = request.args.get("ticker")
+    interval = request.args.get("interval", "5min")  # Default to 5-minute intervals
+
+    if not ticker:
+        return jsonify({"error": "Ticker parameter is missing"}), 400
+
+    print(f"📊 Fetching detailed historical data for: {ticker}")
+
+    # Fetch intraday data from Alpha Vantage
+    df = fetch_historical_data(ticker, interval=interval, output_size="full")
+
+    if df.empty:
+        return jsonify({"error": "No historical data found"}), 404
+
+    # Apply technical indicators
+    df = preprocess_data_with_indicators(df)
+
+    # Predict buy/sell signals
+    df["buy_signal"] = (df["rsi"] < 30) & (df["macd_diff"] > 0)  # Example Buy Signal
+    df["sell_signal"] = (df["rsi"] > 70) & (df["macd_diff"] < 0)  # Example Sell Signal
+
+    # Format response
+    response_data = {
+        "dates": df.index.strftime('%Y-%m-%d %H:%M:%S').tolist(),
+        "open": df["open"].tolist(),
+        "high": df["high"].tolist(),
+        "low": df["low"].tolist(),
+        "close": df["close"].tolist(),
+        "buy_signals": df[df["buy_signal"]]["close"].tolist(),
+        "sell_signals": df[df["sell_signal"]]["close"].tolist(),
+    }
+
+    return jsonify(response_data), 200
+
 
 # Caching (TTLCache)
 historical_data_cache = TTLCache(maxsize=10, ttl=300)
 
 # Function to fetch historical data
 @cached(historical_data_cache)
+@cached(historical_data_cache)
 def fetch_historical_data():
     """
     Fetch historical stock data from Polygon.io.
-    The function will try the most recent 7 days and return the first available data.
+    The function will try fetching data for the last 14 days to ensure availability.
     Caches the result to reduce repeated API calls.
     """
-    for i in range(7):  # Attempt to fetch data for the last 7 days
+    for i in range(14):  # Try fetching data for the last 14 days (extended from 7 days)
         most_recent_date = datetime.utcnow() - timedelta(days=i)
         most_recent_date_str = most_recent_date.strftime("%Y-%m-%d")
-        print(f"Attempting to fetch stock data for: {most_recent_date_str}")
-        
-        # Construct API URL
+        print(f"🔍 Attempting to fetch stock data for: {most_recent_date_str}")
+
         url = (
             f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/"
             f"{most_recent_date_str}?adjusted=true&apiKey={POLYGON_API_KEY}"
         )
-        
+
         try:
-            # Make API request
             response = requests.get(url, timeout=10)
-            response.raise_for_status()  # Raise an exception for HTTP errors
+            response.raise_for_status()  # Raise exception for HTTP errors
             data = response.json()
 
-            # Validate response content
             if "results" in data and data["results"]:
-                print(f"Data fetched successfully for {most_recent_date_str}")
-                return pd.DataFrame(data["results"])
-            else:
-                print(f"No data found for {most_recent_date_str}")
+                print(f"✅ Data fetched successfully for {most_recent_date_str}")
+                return pd.DataFrame(data["results"])  # Convert JSON to DataFrame
 
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching data for {most_recent_date_str}: {e}")
+            print(f"⚠️ No stock data found for {most_recent_date_str}")
 
-    # If no data was fetched for the past 7 days, raise an error
-    raise ValueError("Unable to fetch stock data for any recent trading day.")
+        except requests.exceptions.Timeout:
+            print(f"❌ Timeout error while fetching data for {most_recent_date_str}")
 
+        except requests.exceptions.HTTPError as http_err:
+            print(f"❌ HTTP error: {http_err}")
+
+        except requests.exceptions.RequestException as req_err:
+            print(f"❌ Request error: {req_err}")
+
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+
+    # If all attempts fail, return an empty DataFrame instead of raising an error
+    print("❌ Unable to fetch stock data for any recent trading day. Returning empty DataFrame.")
+    return pd.DataFrame()
+def fetch_alpha_historical_data(ticker, interval="5min", output_size="full"):
+    """
+    Fetch historical stock data from Alpha Vantage and ensure data consistency.
+    """
+    ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
+
+    if not ALPHA_VANTAGE_API_KEY:
+        print("❌ ERROR: Alpha Vantage API key is missing.")
+        return pd.DataFrame()
+
+    url = (
+        f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY"
+        f"&symbol={ticker}&interval={interval}&outputsize={output_size}&apikey={ALPHA_VANTAGE_API_KEY}"
+    )
+
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+
+        print(f"📊 Raw API Response Keys: {list(data.keys())}")  # Debugging
+
+        time_series_key = f"Time Series ({interval})"
+        if time_series_key not in data:
+            print(f"⚠️ No historical data found for {ticker}. Response: {data}")
+            return pd.DataFrame()
+
+        records = data[time_series_key]
+
+        # ✅ Convert JSON to DataFrame
+        df = pd.DataFrame.from_dict(records, orient="index")
+        df.index = pd.to_datetime(df.index)
+
+        print(f"📊 Raw DataFrame Columns Before Renaming: {df.columns.tolist()}")  # Debugging
+
+        # ✅ Rename columns correctly
+        rename_mapping = {
+            "1. open": "o",
+            "2. high": "h",
+            "3. low": "l",
+            "4. close": "c",
+            "5. volume": "v"
+        }
+
+        df.rename(columns=rename_mapping, inplace=True)
+
+        # ✅ Debugging: Check if volume column exists
+        if "v" not in df.columns:
+            print("❌ ERROR: Volume column ('5. volume') was not correctly renamed!")
+            print(f"Current columns: {df.columns.tolist()}")  # Print column names for debugging
+
+        print(f"📊 Sample Row After Renaming:\n{df.head(1)}")  # Print one row for validation
+
+        # ✅ Convert data types to float
+        try:
+            df = df.astype(float)
+        except ValueError as e:
+            print(f"❌ Data type conversion error: {e}")
+            print(f"📌 Current DataFrame:\n{df.head()}")  # Debugging output
+
+        print(f"✅ {ticker} historical data fetched and formatted successfully.")
+        return df
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error fetching Alpha Vantage data for {ticker}: {e}")
+        return pd.DataFrame()
 # Function to analyze sentiment
 def analyze_sentiment(text):
     sentiment = analyzer.polarity_scores(text)
@@ -266,7 +457,46 @@ if os.path.exists(lstm_model_path) and os.path.exists(scaler_path):
 else:
     print("⚠️ LSTM model not found. Training a new one...")
     lstm_cache["model"], lstm_cache["scaler"] = train_and_cache_lstm_model()
-    
+@app.route('/api/alpha-historical-data', methods=['GET'])
+def alpha_historical_data():
+    """
+    Fetch historical data for a selected stock from Alpha Vantage.
+    """
+    ticker = request.args.get("ticker")
+    interval = request.args.get("interval", "5min")  # Default to 5-minute intervals
+
+    if not ticker:
+        return jsonify({"error": "Ticker parameter is missing"}), 400
+
+    print(f"📊 Fetching historical data from Alpha Vantage for: {ticker}")
+
+    # Fetch intraday data from Alpha Vantage
+    df = fetch_alpha_historical_data(ticker, interval=interval, output_size="full")
+
+    if df.empty:
+        return jsonify({"error": "No historical data found"}), 404
+
+    # Debugging: Check before processing
+    print(f"📊 Columns in DataFrame Before Processing: {df.columns.tolist()}")
+
+    # Apply technical indicators
+    df = preprocess_data_with_indicators(df)
+
+    # Debugging: Check after processing
+    print(f"📊 Columns in DataFrame After Processing: {df.columns.tolist()}")
+
+    # ✅ Fix: Use "volume" instead of "v"
+    response_data = {
+        "dates": df.index.strftime('%Y-%m-%d %H:%M:%S').tolist(),
+        "open": df["o"].tolist(),
+        "high": df["h"].tolist(),
+        "low": df["l"].tolist(),
+        "close": df["c"].tolist(),
+        "volume": df["volume"].tolist()  # Fix applied here
+    }
+
+    return jsonify(response_data), 200
+
 # Define API routes below
 @app.route('/api/train-xgboost', methods=['POST'])
 def train_xgboost_endpoint():
@@ -387,57 +617,6 @@ def preprocess_for_lstm(data, features, target, time_steps=150):
         y.append(data[target].iloc[i])
     
     return np.array(X), np.array(y), scaler
-
-# Function to fetch live stock data dynamically
-def fetch_live_stock_data(ticker):
-    #POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "YOUR_API_KEY")
-    url = f"https://api.polygon.io/v2/last/nbbo/{ticker}?apiKey={POLYGON_API_KEY}"
-    
-    try:
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-
-        # Extracting price from response
-        if "results" in data and "p" in data["results"]: 
-            return {"ticker": ticker, "price": data["results"]["p"]}
-        else:
-            print(f"❌ Error: No valid price data for {ticker}")
-            return {"ticker": ticker, "price": None}
-    
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Error fetching live data: {e}")
-        return {"ticker": ticker, "price": None}
-
-# Function to emit live stock data dynamically
-def emit_live_stock_data():
-    tickers = set()  # Dynamically updated ticker list
-    while True:
-        for ticker in list(tickers):
-            live_data = fetch_live_stock_data(ticker)
-            if live_data["price"] is not None:
-                socketio.emit("stock_update", {"ticker": ticker, "price": live_data.get("price")})
-        time.sleep(5)  # Update every 10 seconds
-
-# API to dynamically add tickers for live tracking
-@app.route('/api/add_ticker', methods=['POST'])
-def add_ticker():
-    """
-    Add a new ticker to the live tracking set.
-    """
-    data = request.get_json()
-    ticker = data.get("ticker")
-    if ticker:
-        global tickers
-        tickers.add(ticker.upper())  # Convert to uppercase
-        return jsonify({"message": f"{ticker} added to live updates."}), 200
-    return jsonify({"error": "Ticker not provided."}), 400
-
-
-# Start live data streaming thread
-live_stock_thread = Thread(target=emit_live_stock_data, daemon=True)
-live_stock_thread.start()
-
 
 # Optimized LSTM Model with Attention, CNN, and deeper architecture
 def train_lstm_model(data, features, target, time_steps=150):
@@ -590,15 +769,18 @@ def lstm_predict():
         if not ticker:
             return jsonify({"error": "Ticker parameter is missing"}), 400
 
-        live_data = fetch_live_stock_data(ticker)
+        # Get latest price from WebSocket updates
+        price = latest_stock_prices.get(ticker.upper(), None)
+        if price is None:
+            return jsonify({"error": "No live data available yet for this ticker"}), 404
 
-        # Check if the LSTM model is initialized
+        # Placeholder for LSTM model prediction
         if not lstm_cache["model"] or not lstm_cache["scaler"]:
             raise ValueError("LSTM model is not initialized. Please initialize the model via the scan-stocks route.")
 
         prediction = predict_next_day(
             model=lstm_cache["model"],
-            recent_data=live_data,
+            recent_data={"ticker": ticker, "price": price},
             scaler=lstm_cache["scaler"],
             features=["price_change", "volatility", "volume", "sentiment_score"]
         )
@@ -607,9 +789,9 @@ def lstm_predict():
         print(f"Error in lstm-predict endpoint: {e}")
         return jsonify({"error": str(e)}), 500
 
-
-
-
+# Start WebSocket thread
+websocket_thread = threading.Thread(target=start_websocket_thread, daemon=True)
+websocket_thread.start()
 def preprocess_data_with_indicators(data):
     """
     Add volume, sentiment score, and advanced technical indicators.
@@ -657,17 +839,6 @@ def preprocess_data_with_indicators(data):
     # Debug output
     print("Data after adding indicators:", data.head())
     return data
-# API Route for Real-Time Stock Data
-@app.route('/api/live-data', methods=['GET'])
-def live_data():
-    try:
-        ticker = request.args.get("ticker")
-        if not ticker:
-            return jsonify({"error": "Ticker parameter is missing"}), 400
-        live_data = fetch_live_stock_data(ticker)
-        return jsonify(live_data), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/candlestick', methods=['GET'])
 def candlestick_chart():

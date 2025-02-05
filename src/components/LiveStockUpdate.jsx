@@ -1,37 +1,34 @@
 import React, { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 
-const socket = io("http://localhost:5000"); // Adjust backend URL if needed
+const socket = io("http://localhost:5000");
 
-const LiveStockUpdates = () => {
-    const [stocks, setStocks] = useState({});
+const LiveStockUpdates = ({ selectedTicker }) => {
+  const [livePrice, setLivePrice] = useState(null);
 
-    useEffect(() => {
-        socket.on("stock_update", (data) => {
-            console.log("📡 Live Update Received:", data); // Debugging logs
-            setStocks((prevStocks) => ({
-                ...prevStocks,
-                [data.ticker]: data.price, 
-            }));
-        });
+  useEffect(() => {
+    if (!selectedTicker) return;
 
-        return () => {
-            socket.off("stock_update");
-        };
-    }, []);
+    socket.on("stock_update", (data) => {
+      if (data.ticker === selectedTicker) {
+        console.log(`📡 Live Update Received for ${selectedTicker}:`, data.price);
+        setLivePrice(data.price);
+      }
+    });
 
-    return (
-        <div>
-            <h2>Live Stock Updates</h2>
-            <ul>
-                {Object.keys(stocks).map((ticker) => (
-                    <li key={ticker}>
-                        {ticker}: <strong>${stocks[ticker]?.toFixed(2)}</strong>
-                    </li>
-                ))}
-            </ul>
-        </div>
-    );
+    return () => {
+      socket.off("stock_update");
+    };
+  }, [selectedTicker]);
+
+  return (
+    <div>
+      <h3>{selectedTicker} Live Price</h3>
+      <p style={{ fontSize: "18px", fontWeight: "bold", color: "green" }}>
+        {livePrice !== null ? `$${livePrice.toFixed(2)}` : "Waiting for updates..."}
+      </p>
+    </div>
+  );
 };
 
 export default LiveStockUpdates;
