@@ -10,6 +10,7 @@ import threading
 from datetime import datetime, timedelta
 from threading import Thread
 import optuna
+import re
 
 # ✅ WebSocket & Flask SocketIO
 import websocket
@@ -70,6 +71,7 @@ from utils.realtime_tracking import track_stock_event, fetch_live_stock_data
 from dotenv import load_dotenv  # ✅ Import dotenv
 
 import logging
+import plotly.graph_objects as go
 
 
 
@@ -122,8 +124,11 @@ def load_training_data():
     Returns processed feature matrix (X) and target variable (y).
     """
     try:
+        ticker = request.args.get("ticker")
+        if not ticker:
+            return jsonify({"error": "Ticker is required"}), 400
         # Fetch historical stock data
-        df = fetch_historical_data()  
+        df = fetch_combined_historical_data(ticker)  
 
         # ✅ Apply feature engineering
         df = preprocess_data_with_indicators(df)
@@ -330,76 +335,22 @@ def historical_data():
 historical_data_cache = TTLCache(maxsize=10, ttl=300)
 
 # Function to fetch historical data
-def fetch_historical_data():
+def fetch_historical_data(ticker):
     """
-    Fetch historical stock data from Polygon.io.
+    Fetch full 5 years of historical data from Polygon.io.
     """
-    for i in range(14):  # Try fetching data for the last 14 days
-        most_recent_date = datetime.utcnow() - timedelta(days=i)
-        most_recent_date_str = most_recent_date.strftime("%Y-%m-%d")
-        print(f"🔍 Attempting to fetch stock data for: {most_recent_date_str}")
+    POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
 
-        url = (
-            f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/"
-            f"{most_recent_date_str}?adjusted=true&apiKey={POLYGON_API_KEY}"
-        )
-
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if "results" in data and data["results"]:
-                df = pd.DataFrame(data["results"])  # Convert JSON to DataFrame
-
-                # ✅ Rename columns to match expected format
-                rename_mapping = {
-                    "v": "volume",  # Fix volume column
-                    "o": "o",       # Open price
-                    "c": "c",       # Close price
-                    "h": "h",       # High price
-                    "l": "l",       # Low price
-                }
-                df.rename(columns=rename_mapping, inplace=True)
-
-                # ✅ Debugging Output
-                print("📌 Raw Data Fetched from API:")
-                print(df.head(5))  # Print the first 5 rows
-                print("📌 Columns in DataFrame:", df.columns.tolist())  # Print column names
-
-                return df  # Return DataFrame
-
-            print(f"⚠️ No stock data found for {most_recent_date_str}")
-
-        except requests.exceptions.Timeout:
-            print(f"❌ Timeout error while fetching data for {most_recent_date_str}")
-
-        except requests.exceptions.HTTPError as http_err:
-            print(f"❌ HTTP error: {http_err}")
-
-        except requests.exceptions.RequestException as req_err:
-            print(f"❌ Request error: {req_err}")
-
-        except Exception as e:
-            print(f"❌ Unexpected error: {e}")
-
-    print("❌ Unable to fetch stock data. Returning empty DataFrame.")
-    return pd.DataFrame()
-
-
-def fetch_alpha_historical_data(ticker, interval="5min", output_size="full"):
-    """
-    Fetch historical stock data from Alpha Vantage and ensure data consistency.
-    """
-    ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
-
-    if not ALPHA_VANTAGE_API_KEY:
-        print("❌ ERROR: Alpha Vantage API key is missing.")
+    if not POLYGON_API_KEY:
+        print("❌ ERROR: Polygon.io API key is missing.")
         return pd.DataFrame()
 
+    end_date = datetime.today().strftime("%Y-%m-%d")
+    start_date = (datetime.today() - timedelta(days=5*365)).strftime("%Y-%m-%d")  # 5 years ago
+
     url = (
-        f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY"
-        f"&symbol={ticker}&interval={interval}&outputsize={output_size}&apikey={ALPHA_VANTAGE_API_KEY}"
+        f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start_date}/{end_date}"
+        f"?adjusted=true&sort=asc&apiKey={POLYGON_API_KEY}"
     )
 
     try:
@@ -407,50 +358,69 @@ def fetch_alpha_historical_data(ticker, interval="5min", output_size="full"):
         response.raise_for_status()
         data = response.json()
 
-        print(f"📊 Raw API Response Keys: {list(data.keys())}")  # Debugging
+        if "results" not in data:
+            print(f"⚠️ No historical data found for {ticker} on Polygon.io")
+            return pd.DataFrame()
 
-        time_series_key = f"Time Series ({interval})"
-        if time_series_key not in data:
+        df = pd.DataFrame(data["results"])
+        df.rename(columns={"v": "volume", "o": "o", "h": "h", "l": "l", "c": "c"}, inplace=True)
+        df["t"] = pd.to_datetime(df["t"], unit="ms")
+        df.set_index("t", inplace=True)
+
+        print(f"✅ {ticker} Polygon.io data fetched successfully. Total records: {len(df)}")
+        return df
+    
+    except Exception as e:
+        print(f"❌ Error fetching Polygon.io data for {ticker}: {e}")
+        return pd.DataFrame()
+
+
+
+def fetch_alpha_historical_data(ticker):
+    """
+    Fetch full 10 years of historical data from Alpha Vantage.
+    """
+    ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
+
+    if not ALPHA_VANTAGE_API_KEY:
+        print("❌ ERROR: Alpha Vantage API key is missing.")
+        return pd.DataFrame()
+
+    end_date = datetime.today().strftime("%Y-%m-%d")
+    start_date = (datetime.today() - timedelta(days=10*365)).strftime("%Y-%m-%d")  # 10 years ago
+
+    url = (
+        f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED"
+        f"&symbol={ticker}&outputsize=full&apikey={ALPHA_VANTAGE_API_KEY}"
+    )
+
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+
+        if "Time Series (Daily)" not in data:
             print(f"⚠️ No historical data found for {ticker}. Response: {data}")
             return pd.DataFrame()
 
-        records = data[time_series_key]
-
-        # ✅ Convert JSON to DataFrame
+        records = data["Time Series (Daily)"]
         df = pd.DataFrame.from_dict(records, orient="index")
         df.index = pd.to_datetime(df.index)
 
-        print(f"📊 Raw DataFrame Columns Before Renaming: {df.columns.tolist()}")  # Debugging
-
-        # ✅ Rename columns correctly
         rename_mapping = {
             "1. open": "o",
             "2. high": "h",
             "3. low": "l",
             "4. close": "c",
-            "5. volume": "volume"
+            "6. volume": "volume"
         }
-
         df.rename(columns=rename_mapping, inplace=True)
-
-        # ✅ Debugging: Check if volume column exists
-        if "v" not in df.columns:
-            print("❌ ERROR: Volume column ('5. volume') was not correctly renamed!")
-            print(f"Current columns: {df.columns.tolist()}")  # Print column names for debugging
-
-        print(f"📊 Sample Row After Renaming:\n{df.head(1)}")  # Print one row for validation
-
-        # ✅ Convert data types to float
-        try:
-            df = df.astype(float)
-        except ValueError as e:
-            print(f"❌ Data type conversion error: {e}")
-            print(f"📌 Current DataFrame:\n{df.head()}")  # Debugging output
+        df = df.astype(float)
 
         print(f"✅ {ticker} historical data fetched and formatted successfully.")
         return df
 
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         print(f"❌ Error fetching Alpha Vantage data for {ticker}: {e}")
         return pd.DataFrame()
 # Function to analyze sentiment
@@ -489,6 +459,22 @@ def fetch_sentiment_score_alpha(ticker):
     except Exception as e:
         print(f"❌ ERROR fetching sentiment for {ticker}: {e}")
         return 0  # Default to 0 on failure
+def fetch_combined_historical_data(ticker):
+    """
+    Fetch data from both Alpha Vantage and Polygon.io, merge and clean.
+    """
+    df_alpha = fetch_alpha_historical_data(ticker)
+    df_polygon = fetch_historical_data(ticker)
+
+    if df_alpha.empty and df_polygon.empty:
+        print(f"❌ No data available for {ticker} from both sources.")
+        return pd.DataFrame()
+
+    df_combined = pd.concat([df_alpha, df_polygon]).sort_index().drop_duplicates()
+    print(f"✅ Combined dataset for {ticker}: {len(df_combined)} records.")
+    return df_combined
+
+logging.basicConfig(filename="app.log", level=logging.INFO)
 
 def preprocess_data_with_indicators(df):
     """
@@ -549,8 +535,10 @@ def preprocess_data_with_indicators(df):
         df["mfi"] = money_flow_index(high=df["h"], low=df["l"], close=df["c"], volume=df["volume"], window=14)
         df["mfi"].fillna(0, inplace=True)
 
-        # ✅ Debugging Step: Print available columns after processing
-        logging.info(f"📌 Final Columns in DataFrame: {df.columns.tolist()}")
+        # ✅ Ensure enough rows for LSTM training
+        if len(df) < 50:
+            logging.warning(f"⚠️ Not enough data for LSTM: {len(df)} rows. Required: 50.")
+            return df, None  # Return None for scaler if insufficient data
 
         # ✅ Standardizing Feature Scaling for LSTM Compatibility
         scaler = StandardScaler()
@@ -623,32 +611,46 @@ def generate_trade_signals(data):
     return data
 def plot_candlestick_chart(data, ticker):
     """
-    Plot candlestick chart with AI buy/sell signals.
+    Plot candlestick chart with buy/sell signals.
     """
-    buy_signals = data[data["buy_signal"] == 1]
-    sell_signals = data[data["sell_signal"] == 1]
+    fig = go.Figure(data=[go.Candlestick(
+        x=data.index,
+        open=data["o"],
+        high=data["h"],
+        low=data["l"],
+        close=data["c"],
+        name="Candlesticks"
+    )])
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    # Add buy/sell signals
+    fig.add_trace(go.Scatter(
+        x=data[data["buy_signal"] == 1].index,
+        y=data[data["buy_signal"] == 1]["c"],
+        mode="markers",
+        marker=dict(color="green", size=10),
+        name="Buy Signal"
+    ))
 
-    # ✅ Candlestick Chart
-    mpf.plot(data, type="candle", ax=ax, volume=True)
+    fig.add_trace(go.Scatter(
+        x=data[data["sell_signal"] == 1].index,
+        y=data[data["sell_signal"] == 1]["c"],
+        mode="markers",
+        marker=dict(color="red", size=10),
+        name="Sell Signal"
+    ))
 
-    # ✅ Highlight Buy Signals
-    ax.scatter(buy_signals.index, buy_signals["c"], color="green", label="BUY", marker="^", alpha=1, s=100)
+    fig.update_layout(title=f"{ticker} - AI Trading Signals", xaxis_title="Date", yaxis_title="Price")
+    fig.show()
 
-    # ✅ Highlight Sell Signals
-    ax.scatter(sell_signals.index, sell_signals["c"], color="red", label="SELL", marker="v", alpha=1, s=100)
-
-    # ✅ Display Trendlines
-    ax.set_title(f"{ticker} - AI Trading Signals")
-    ax.legend()
-    plt.show()
 
 # Train XGBoost model
 def train_xgboost_model():
     try:
+        ticker = request.args.get("ticker")
+        if not ticker:
+            return jsonify({"error": "Ticker is required"}), 400
         # Fetch and preprocess data
-        data, _ = preprocess_data_with_indicators(fetch_historical_data())  # Unpack only the DataFrame
+        data, _ = preprocess_data_with_indicators(fetch_combined_historical_data(ticker))  # Unpack only the DataFrame
 
         # Define the feature set dynamically
         features = [
@@ -711,8 +713,11 @@ def train_and_cache_lstm_model():
     Train the LSTM model and cache it for future use.
     """
     try:
+        ticker = request.args.get("ticker")
+        if not ticker:
+            return jsonify({"error": "Ticker is required"}), 400
         # Fetch and preprocess historical data
-        data = fetch_historical_data()
+        data = fetch_combined_historical_data(ticker)
         data = preprocess_data_with_indicators(data)
         
         # ✅ Debug: Check available columns before training
@@ -879,47 +884,76 @@ def tune_xgboost_hyperparameters(X_train, y_train, n_trials=50):
 @app.route('/api/scan-stocks', methods=['GET'])
 def scan_stocks():
     try:
+        # ✅ Extract & Validate Ticker Parameter
+        ticker = request.args.get("ticker")
+        if not ticker:
+            return jsonify({"error": "❌ Ticker parameter is required"}), 400
+        
+        if not re.match(r"^[A-Za-z]{1,5}$", ticker):
+            return jsonify({"error": f"❌ Invalid ticker format: {ticker}. Must be 1-5 letters (e.g., AAPL, TSLA)."}), 400
+
+        ticker = ticker.upper()  # Ensure uppercase format
+        print(f"📊 Scanning stock: {ticker}")
+
+        # ✅ Cache Check: Avoid Unnecessary API Calls
+        if ticker in historical_data_cache:
+            print(f"✅ Using cached data for {ticker}")
+            data = historical_data_cache[ticker]
+        else:
+            # ✅ Fetch & Cache Data
+            data = fetch_combined_historical_data(ticker)
+            if data.empty:
+                return jsonify({"error": f"⚠️ No data available for {ticker}"}), 404
+            historical_data_cache[ticker] = data  # Cache result
+
+        # ✅ Preprocess Data
+        data = preprocess_data_with_indicators(data)
+
+        # ✅ Extract Scan Parameters
         min_price = float(request.args.get("min_price", 0))
         max_price = float(request.args.get("max_price", float("inf")))
         volume_surge = float(request.args.get("volume_surge", 1.2))
         min_rsi = float(request.args.get("min_rsi", 0))
         max_rsi = float(request.args.get("max_rsi", 100))
-        
+
         print(f"📌 Scan Params: min_price={min_price}, max_price={max_price}, volume_surge={volume_surge}, min_rsi={min_rsi}, max_rsi={max_rsi}")
-        
-        data = fetch_historical_data()
-        if data.empty:
-            print("⚠️ No stock data available!")
-            return jsonify({"error": "No stock data available"}), 404
-        
-        data = preprocess_data_with_indicators(data)
-        
-        required_columns = ["adx", "atr", "mfi", "buy_signal", "sell_signal", "c", "volume_surge", "rsi", "sentiment_score", "bollinger_upper", "bollinger_lower", "macd_diff"]
+
+        # ✅ Ensure Required Columns Exist
+        required_columns = ["adx", "atr", "mfi", "buy_signal", "sell_signal", "c", "volume_surge", "rsi", 
+                            "sentiment_score", "bollinger_upper", "bollinger_lower", "macd_diff"]
+
         for col in required_columns:
             if col not in data.columns:
-                data[col] = 0
+                data[col] = 0  # Default missing values
                 print(f"⚠️ WARNING: {col} missing, using default values.")
-        
-        filtered_data = data[(data["c"] >= min_price) & (data["c"] <= max_price) & (data["volume_surge"] > volume_surge) & (data["rsi"] >= min_rsi) & (data["rsi"] <= max_rsi)].copy()
-        
+
+        # ✅ Filter Based on Scan Criteria
+        filtered_data = data[
+            (data["c"] >= min_price) & (data["c"] <= max_price) &
+            (data["volume_surge"] > volume_surge) & (data["rsi"] >= min_rsi) & (data["rsi"] <= max_rsi)
+        ].copy()
+
         if filtered_data.empty:
-            return jsonify({"candidates": []}), 200
-        
+            return jsonify({"candidates": []}), 200  # No matching stocks
+
+        # ✅ Predict Using XGBoost Model
         filtered_data["xgboost_prediction"] = xgb_model.predict(filtered_data[feature_columns])
+
+        # ✅ Filter Only Positive XGBoost Predictions
         xgb_filtered_data = filtered_data[filtered_data["xgboost_prediction"] == 1].copy()
-        
+
         if xgb_filtered_data.empty:
             return jsonify({"candidates": []}), 200
-        
+
+        # ✅ Ensure Sufficient Data for LSTM
         if len(xgb_filtered_data) < 50:
             print(f"⚠️ Insufficient data for LSTM prediction: {len(xgb_filtered_data)} rows.")
             return jsonify({"candidates": xgb_filtered_data.head(20).to_dict(orient="records")}), 200
-        
+
+        # ✅ Apply LSTM Predictions
         lstm_features = ["price_change", "volatility", "volume", "sentiment_score"]
-        
-        # Apply feature scaling once before row-wise prediction
         xgb_filtered_data[lstm_features] = lstm_cache["scaler"].transform(xgb_filtered_data[lstm_features])
-        
+
         xgb_filtered_data["next_day_prediction"] = xgb_filtered_data.apply(
             lambda row: predict_next_day_lstm(
                 model=lstm_cache["model"],
@@ -928,18 +962,21 @@ def scan_stocks():
                 scaler=lstm_cache["scaler"]
             ), axis=1
         )
-        
+
+        # ✅ Clip Unrealistic Predictions
         max_increase = 1.5
         xgb_filtered_data["next_day_prediction"] = xgb_filtered_data["next_day_prediction"].clip(upper=xgb_filtered_data["c"] * max_increase)
-        
-        # Fix combined score computation
+
+        # ✅ Compute Final AI Score (XGBoost + LSTM Weighted)
         xgb_weight, lstm_weight = 0.6, 0.4
         xgb_filtered_data["combined_score"] = (
             (xgb_weight * xgb_filtered_data["xgboost_prediction"]) +
             (lstm_weight * (xgb_filtered_data["next_day_prediction"] / (xgb_filtered_data["c"] + 1e-6)))
         )
-        
+
+        # ✅ Select Top 20 Candidates Based on AI Score
         top_candidates = xgb_filtered_data.sort_values("combined_score", ascending=False).head(20)
+
         return jsonify({"candidates": top_candidates.to_dict(orient="records")}), 200
 
     except Exception as e:
@@ -1081,8 +1118,11 @@ def train_and_cache_lstm_model(df):
     Train the LSTM model and cache it for future use.
     """
     try:
+        ticker = request.args.get("ticker")
+        if not ticker:
+            return jsonify({"error": "Ticker is required"}), 400
         # Fetch and preprocess historical data
-        data = fetch_historical_data()
+        data = fetch_combined_historical_data(ticker)
         print(f"📌 Columns After Processing: {df.columns.tolist()}")  # Debug
 
         data = preprocess_data_with_indicators(data)
@@ -1132,29 +1172,45 @@ def train_lstm_endpoint():
     Ensures proper data preprocessing, model saving, and logging.
     """
     try:
+        # ✅ Retrieve ticker dynamically from API request
+        ticker = request.args.get("ticker")
+        if not ticker:
+            return jsonify({"error": "❌ Ticker parameter is required"}), 400
+        
+        # ✅ Validate ticker format (1-5 uppercase letters)
+        if not re.match(r"^[A-Za-z]{1,5}$", ticker):
+            return jsonify({"error": f"❌ Invalid ticker format: {ticker}. Must be 1-5 letters (e.g., AAPL, TSLA)."}), 400
+        
+        ticker = ticker.upper()  # Standardize ticker format
+        print(f"📊 Training CNN-LSTM model for ticker: {ticker}")
+
+        # ✅ Fetch Historical Data
         print("📌 Fetching historical stock data...")
-        data = fetch_historical_data()
+        data = fetch_combined_historical_data(ticker)
+
+        if data.empty:
+            return jsonify({"error": f"⚠️ No historical data available for {ticker}. Training aborted."}), 404
 
         # ✅ Compute sentiment scores if needed
-        
         if "T" in data.columns:
             data["sentiment_score"] = data["T"].apply(fetch_and_process_sentiment_data)
         else:
             print("⚠️ 'T' column missing, skipping sentiment analysis.")
             data["sentiment_score"] = 0
 
+        # ✅ Preprocess Data with Technical Indicators
         print("📌 Preprocessing data with indicators...")
         data = preprocess_data_with_indicators(data)
 
-        # ✅ Ensure `macd_diff` is explicitly computed
+        # ✅ Compute `macd_diff` explicitly
         if "macd_line" in data.columns and "macd_signal" in data.columns:
             data["macd_diff"] = data["macd_line"] - data["macd_signal"]
             data["macd_diff"] = data["macd_diff"].fillna(0)  # Handle missing values
 
-        # ✅ Debugging: Check columns before training
+        # ✅ Debugging: Check available columns before training
         print("📌 Columns Available Before Training:", data.columns.tolist())
 
-        # ✅ Define features list dynamically based on availability
+        # ✅ Define features dynamically
         available_features = set(data.columns.tolist())
         base_features = ["price_change", "volatility", "volume", "rsi", "macd_line", "macd_signal"]
         if "macd_diff" in available_features:
@@ -1183,22 +1239,47 @@ def train_lstm_endpoint():
         print(f"✅ Model saved at: {lstm_model_path}")
         print(f"✅ Scaler saved at: {scaler_path}")
 
-        return jsonify({"message": "CNN-LSTM model trained successfully!"}), 200
+        return jsonify({"message": f"✅ CNN-LSTM model trained successfully for {ticker}"}), 200
 
     except Exception as e:
         print(f"❌ Error in LSTM training: {e}")
         return jsonify({"error": str(e)}), 500
 
-# Train both models
-data = fetch_historical_data()
-xgb_model, feature_columns = train_xgboost_model()
-# lstm_model, lstm_scaler = train_lstm_model(
-#     data, 
-#     features=["price_change", "volatility", "volume", "sentiment_score"], 
-#     target="c"
-# )
+# ✅ Ensure `ticker` is retrieved before training models
+try:
+    # Retrieve ticker from API request (dynamic)
+    ticker = request.args.get("ticker")
+    if not ticker:
+        raise ValueError("❌ ERROR: Ticker is required for training models.")
 
-# API to predict using LSTM
+    # Validate ticker format
+    if not re.match(r"^[A-Za-z]{1,5}$", ticker):
+        raise ValueError(f"❌ ERROR: Invalid ticker format: {ticker}. Must be 1-5 letters (e.g., AAPL, TSLA).")
+
+    ticker = ticker.upper()  # Convert to uppercase
+    print(f"📊 Starting model training for ticker: {ticker}")
+
+    # ✅ Fetch Historical Data
+    data = fetch_combined_historical_data(ticker)
+    if data.empty:
+        raise ValueError(f"⚠️ No historical data available for {ticker}. Training aborted.")
+
+    # ✅ Train XGBoost Model
+    xgb_model, feature_columns = train_xgboost_model()
+
+    # ✅ Train LSTM Model (Optional)
+    # lstm_model, lstm_scaler = train_lstm_model(
+    #     data, 
+    #     features=["price_change", "volatility", "volume", "sentiment_score"], 
+    #     target="c"
+    # )
+
+    print(f"✅ Model training completed successfully for ticker: {ticker}")
+
+except Exception as e:
+    print(f"❌ ERROR in Model Training: {e}")
+    data = None  # Prevents further execution if ticker is invalid
+
 @app.route('/api/lstm-predict', methods=['GET'])
 def lstm_predict():
     try:
@@ -1462,7 +1543,7 @@ def ai_predict():
             return jsonify({"error": "Ticker is required"}), 400
 
         # ✅ Fetch data and preprocess
-        df = fetch_historical_data(ticker)
+        df = fetch_combined_historical_data(ticker)
         df = preprocess_data_with_indicators(df)
         df = detect_breakouts(df)
         df = generate_trade_signals(df)
