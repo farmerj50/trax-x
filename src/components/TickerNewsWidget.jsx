@@ -5,57 +5,40 @@ const TickerNewsWidget = ({ tickers }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    console.log("📌 Received tickers in TickerNewsWidget:", tickers);
+
+    if (!tickers || tickers.length === 0) {
+      console.warn("⚠️ No tickers available for fetching news.");
+      setNews({});
+      setLoading(false);
+      return;
+    }
+
     const fetchNewsForTickers = async () => {
       setLoading(true);
-      const allNews = {};
-  
+      const tickerString = tickers.join(",");  // ✅ Convert to comma-separated string
+      console.log(`📌 Fetching news for tickers: ${tickerString}`);
+
       try {
-        for (const ticker of tickers) {
-          const response = await fetch(`http://localhost:5000/api/ticker-news?ticker=${ticker}`);
-          const data = await response.json();
-          console.log(`Full API response for ${ticker}:`, data);
-  
-          // Access the array under the dynamic key
-          const tickerNews = data[ticker]; // Adjusted to access the dynamic key
-          if (tickerNews && Array.isArray(tickerNews) && tickerNews.length > 0) {
-            allNews[ticker] = tickerNews.map((article, index) => {
-              console.log(`Processing article ${index} for ${ticker}:`, article);
-              return {
-                id: article.id,
-                title: article.title,
-                article_url: article.article_url,
-                author: article.author,
-                description: article.description || "No description available.",
-                image_url: article.image_url,
-                published_utc: article.published_utc,
-                sentiment: article.insights?.[0]?.sentiment || "neutral",
-                sentiment_reasoning: article.insights?.[0]?.sentiment_reasoning || "No sentiment reasoning provided.",
-                publisher: article.publisher?.name || "Unknown Publisher",
-              };
-            });
-          } else {
-            console.warn(`No results found for ${ticker} or response structure is invalid.`);
-            allNews[ticker] = [];
-          }
+        const response = await fetch(`http://localhost:5000/api/ticker-news?ticker=${tickerString}`);
+        const data = await response.json();
+        console.log("📌 API Response:", data);
+
+        if (data.error) {
+          console.error("❌ Error from API:", data.error);
+          setNews({});
+        } else {
+          setNews(data);
         }
-  
-        console.log("Final compiled news object:", allNews);
-        setNews(allNews);
       } catch (error) {
-        console.error("Error fetching news:", error);
+        console.error("❌ Error fetching news:", error);
       } finally {
         setLoading(false);
       }
     };
-  
-    if (tickers.length > 0) {
-      fetchNewsForTickers();
-    } else {
-      setNews({});
-      setLoading(false);
-    }
+
+    fetchNewsForTickers();
   }, [tickers]);
-  
 
   if (loading) {
     return <div className="news-widget">Loading news...</div>;
@@ -80,7 +63,10 @@ const TickerNewsWidget = ({ tickers }) => {
                   </a>
                 </h6>
                 <p><strong>Author:</strong> {article.author}</p>
-                <p><strong>Publisher:</strong> {article.publisher}</p>
+
+                {/* ✅ FIX: Extract publisher name properly */}
+                <p><strong>Publisher:</strong> {typeof article.publisher === "object" ? article.publisher.name : "Unknown Publisher"}</p>
+
                 <p><strong>Published:</strong> {new Date(article.published_utc).toLocaleString()}</p>
                 {article.description && <p>{article.description}</p>}
                 {article.image_url && <img src={article.image_url} alt={article.title} style={{ maxWidth: "100%" }} />}

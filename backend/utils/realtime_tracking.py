@@ -1,58 +1,68 @@
-import requests
+import os
 import pandas as pd
 import numpy as np
 from flask_socketio import emit
 from xgboost import XGBClassifier
 from joblib import load, dump
-import os
+import requests
 
 # Polygon.io API Key
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "swpC4ge5_aGqdJll3gplZ6a40ADuwhzG")
 
-# Path to the pre-trained XGBoost model
-MODEL_PATH = r"C:\Users\gabby\trax-x\models\xgb_model.joblib"
+# Model file path
+MODEL_DIR = os.path.abspath(r"C:\Users\gabby\trax-x\backend\models")  # Ensure absolute path
+if not os.path.exists(MODEL_DIR):
+    print(f"📁 Creating missing models directory at: {MODEL_DIR}")
+    os.makedirs(MODEL_DIR, exist_ok=True)
+MODEL_PATH = os.path.join(MODEL_DIR, "xgb_model.joblib")
 
-# Feature columns
+# Feature columns for model training
 feature_columns = ["price_change", "volatility", "volume", "sentiment_score", "rsi", "macd_diff"]
 
-# Load or train the model
+# ✅ Ensure the models directory exists before saving/loading the model
+if not os.path.exists(MODEL_DIR):
+    print(f"📁 Creating missing models directory: {MODEL_DIR}")
+    os.makedirs(MODEL_DIR)
+
+# ✅ Load or train the XGBoost model
 def load_or_train_model():
     if os.path.exists(MODEL_PATH):
         try:
             model = load(MODEL_PATH)
-            print("Model loaded successfully!")
+            print(f"✅ Model loaded successfully from {MODEL_PATH}!")
         except Exception as e:
-            print(f"Error loading the model: {e}. Retraining the model.")
+            print(f"❌ Error loading the model: {e}. Retraining the model.")
             model = train_and_save_model()
     else:
-        print("Model file not found. Training a new model.")
+        print("⚠️ Model file not found. Training a new model.")
         model = train_and_save_model()
     return model
 
-# Train and save the model
+# ✅ Train and save the model
 def train_and_save_model():
-    # Example data for training the model (replace with real data)
     from sklearn.datasets import make_classification
     from sklearn.model_selection import train_test_split
+
+    print("📌 Training new XGBoost model...")
 
     # Generate dummy data
     X, y = make_classification(n_samples=1000, n_features=len(feature_columns), random_state=42)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     # Train the model
-    model = XGBClassifier()
+    model = XGBClassifier(n_estimators=300, max_depth=6, learning_rate=0.05, random_state=42)
     model.fit(X_train, y_train)
 
-    # Save the model to the specified path
+    # Save the trained model
     dump(model, MODEL_PATH)
-    print("Model trained and saved successfully!")
+    print(f"✅ Model trained and saved successfully at {MODEL_PATH}!")
 
     return model
 
-# Load the XGBoost model
+# ✅ Load the trained model
 xgb_model = load_or_train_model()
 
-# Fetch Live Stock Data
+# ✅ Fetch Live Stock Data
 def fetch_live_stock_data(ticker):
     """Fetch real-time stock data from Polygon.io."""
     try:
@@ -67,33 +77,20 @@ def fetch_live_stock_data(ticker):
         }
     except requests.exceptions.RequestException as e:
         raise ValueError(f"Error fetching live stock data for {ticker}: {e}")
-def track_stock_event(data):
-    """Handle real-time stock tracking and emit WebSocket event."""
-    ticker = data.get("ticker")
-    if not ticker:
-        return emit("error", {"message": "Ticker is missing."})
 
-    try:
-        # Fetch real-time stock data
-        live_data = fetch_live_stock_data(ticker)
-
-        # Emit real-time stock update
-        emit("stock_update", live_data)
-    except Exception as e:
-        emit("error", {"message": str(e)})
-# Preprocess Live Data
+# ✅ Preprocess Real-Time Data for AI/ML Prediction
 def preprocess_live_data(price, volume, sentiment_score):
     """Prepare real-time data for AI/ML prediction."""
     return {
-        "price_change": np.random.uniform(-0.05, 0.05),  # Use real-time price history
-        "volatility": np.random.uniform(0.01, 0.05),    # Use price range over a window
+        "price_change": np.random.uniform(-0.05, 0.05),  # Replace with actual price change
+        "volatility": np.random.uniform(0.01, 0.05),    # Replace with actual volatility
         "volume": volume,
         "sentiment_score": sentiment_score,
         "rsi": np.random.uniform(30, 70),  # Replace with actual RSI calculation
         "macd_diff": np.random.uniform(-1, 1),  # Replace with actual MACD calculation
     }
 
-# Handle Real-Time Stock Tracking
+# ✅ Real-Time Stock Tracking via WebSocket
 def track_stock_event(data):
     """Real-time stock tracking using WebSocket."""
     ticker = data.get("ticker")
@@ -113,7 +110,7 @@ def track_stock_event(data):
         # Predict using the XGBoost model
         prediction = xgb_model.predict(features)[0]
 
-        # Emit real-time data with recommendation
+        # Emit real-time stock update
         emit("stock_update", {
             "ticker": live_data["ticker"],
             "price": live_data["price"],

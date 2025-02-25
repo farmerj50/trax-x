@@ -22,6 +22,10 @@ const CandlestickChart = ({ ticker, entryPoint, exitPoint, additionalData, pageT
   const [darkMode, setDarkMode] = useState(
     window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
   );
+  useEffect(() => {
+    console.log(`📌 CandlestickChart received ticker:`, ticker);
+  }, [ticker]);
+  
 
   useEffect(() => {
     const fetchChartData = async () => {
