@@ -1,7 +1,7 @@
 import requests
 
-# Polygon.io API Key
-POLYGON_API_KEY = "YOUR_API_KEY"  # Replace with your actual API key
+# Polygon.io API Key (Replace with your actual API key)
+POLYGON_API_KEY = "swpC4ge5_aGqdJll3gplZ6a40ADuwhzG"  
 
 def fetch_ticker_news(ticker, limit=5):
     """
@@ -12,15 +12,33 @@ def fetch_ticker_news(ticker, limit=5):
         limit (int): Number of articles to fetch (default is 5).
 
     Returns:
-        dict: The news data returned by the Polygon API.
+        list: A list of news articles or an empty list if an error occurs.
     """
     if not ticker:
         raise ValueError("Ticker is required")
 
     url = f"https://api.polygon.io/v2/reference/news?ticker={ticker}&limit={limit}&apiKey={POLYGON_API_KEY}"
+    
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        return response.json()
+        headers = {"Accept": "application/json"}  # Ensure JSON response
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()  # Raise an error for bad responses (4xx, 5xx)
+        
+        # ✅ Debug: Print raw response
+        print("📌 Raw API Response:", response.text[:200])  # Print first 200 chars
+
+        data = response.json()  # Convert response to JSON
+
+        # ✅ Debug: Print parsed JSON
+        print("📌 Parsed JSON:", data)
+
+        # Ensure response contains the expected "results" key
+        if not isinstance(data, dict) or "results" not in data:
+            print(f"⚠️ Unexpected response format: {data}")
+            return []
+
+        return data["results"]
+
     except requests.exceptions.RequestException as e:
-        raise RuntimeError(f"Error fetching news for {ticker}: {e}")
+        print(f"❌ Error fetching news for {ticker}: {e}")
+        return []
