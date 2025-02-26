@@ -61,8 +61,15 @@ def preprocess_data_with_indicators(df):
         df["macd_diff"] = macd.macd_diff()
         df["macd_diff"].fillna(0, inplace=True)
 
-        # ✅ RSI Calculation
+        # ✅ RSI Calculation (Ensure Proper 0-100 Range)
         df["rsi"] = RSIIndicator(close=df["close"], window=14, fillna=True).rsi()
+
+        # ✅ Fix RSI Scaling if It Was Standardized Incorrectly
+        if df["rsi"].max() < 20 or df["rsi"].min() < -20:  # Detect if RSI is incorrectly scaled
+            logging.warning("⚠️ RSI is standardized! Converting back to 0-100 range...")
+
+            # Normalize RSI back to its original range
+            df["rsi"] = ((df["rsi"] - df["rsi"].min()) / (df["rsi"].max() - df["rsi"].min())) * 100
 
         # ✅ ADX Calculation
         df["adx"] = ADXIndicator(high=df["high"], low=df["low"], close=df["close"], window=14, fillna=True).adx()
@@ -94,14 +101,14 @@ def preprocess_data_with_indicators(df):
         # ✅ Debugging Step: Print available columns after processing
         logger.info(f"📌 Final Columns in DataFrame: {df.columns.tolist()}")
 
-        # ✅ Standardizing Feature Scaling for LSTM Compatibility
+        # ✅ Standardizing Feature Scaling for LSTM Compatibility (EXCLUDING RSI)
         scaler = StandardScaler()
-        feature_columns = ["price_change", "volatility", "volume", "rsi", "macd_diff", "adx", "atr", "mfi"]
+        feature_columns = ["price_change", "volatility", "volume", "macd_diff", "adx", "atr", "mfi"]  # ✅ RSI EXCLUDED
         df[feature_columns] = scaler.fit_transform(df[feature_columns])
 
         logger.info("✅ Data successfully standardized for LSTM model.")
         
-         # ✅ Log Buy Signal Distribution
+        # ✅ Log Buy Signal Distribution
         buy_signal_count = df["buy_signal"].sum()
         logging.info(f"📌 Total Buy Signals Detected: {buy_signal_count}")
 

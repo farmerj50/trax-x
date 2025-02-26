@@ -72,7 +72,7 @@ def preprocess_for_lstm(data, features, target, time_steps=50):
         return None, None, None
 
 
-def train_cnn_lstm_model(data, features, target, time_steps=150):
+def train_cnn_lstm_model(data, features, target, time_steps=50):
     """
     Train a CNN-LSTM model with attention for stock price prediction.
     """
@@ -84,7 +84,8 @@ def train_cnn_lstm_model(data, features, target, time_steps=150):
             raise ValueError("❌ ERROR: Not enough data for LSTM training.")
 
         # ✅ Define Input Layer
-        input_layer = Input(shape=(X.shape[1], X.shape[2]))
+        input_layer = Input(shape=(50, X.shape[2]))  # ✅ Fix: Set time_steps=50
+
 
         # ✅ CNN Feature Extraction
         cnn_layer = Conv1D(filters=128, kernel_size=3, activation=LeakyReLU(alpha=0.1))(input_layer)
@@ -184,7 +185,7 @@ def train_and_cache_lstm_model():
         data, scaler = preprocess_data_with_indicators(data)
 
         # ✅ Train Model
-        model, scaler = train_cnn_lstm_model(data, features=["price_change", "volatility", "volume", "rsi"], target="close")
+        model, scaler = train_cnn_lstm_model(data, features=["price_change", "volatility", "volume", "rsi", "macd_diff", "adx", "atr", "mfi"], target="close")
 
         # ✅ Cache the model
         lstm_cache["model"], lstm_cache["scaler"] = model, scaler
@@ -194,3 +195,42 @@ def train_and_cache_lstm_model():
     except Exception as e:
         logger.error(f"❌ Error training and saving LSTM model: {e}")
         return None, None  # Prevent app crash
+    import numpy as np
+
+def predict_next_day(model, recent_data, scaler, features):
+    """
+    Predicts the next day's closing price using the trained LSTM model.
+
+    Args:
+        model: The trained LSTM model.
+        recent_data: The most recent data available as a DataFrame.
+        scaler: The StandardScaler used for preprocessing.
+        features: List of feature columns used in training.
+
+    Returns:
+        float: Predicted next day's closing price.
+    """
+    try:
+        # ✅ Ensure there are enough rows for LSTM (e.g., last 50 time steps)
+        time_steps = 50
+        if len(recent_data) < time_steps:
+            print(f"⚠️ Not enough historical data. Required: {time_steps}, Found: {len(recent_data)}")
+            return None
+
+        # ✅ Select required features and scale them
+        recent_features = recent_data[features].iloc[-time_steps:].values
+        recent_features_scaled = scaler.transform(recent_features)
+
+        # ✅ Reshape to match LSTM input shape (1 sample, 50 time steps, num_features)
+        recent_features_scaled = np.array(recent_features_scaled).reshape(1, time_steps, len(features))
+
+        # ✅ Make prediction
+        predicted_price = model.predict(recent_features_scaled)[0][0]
+
+        print(f"📌 LSTM Prediction for Next Day: {predicted_price}")
+        return predicted_price
+
+    except Exception as e:
+        print(f"❌ Error in predict_next_day: {e}")
+        return None
+

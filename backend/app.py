@@ -208,7 +208,7 @@ def historical_data():
     print(f"📊 Fetching historical data for: {ticker}")
 
     # Fetch historical data for the given ticker
-    df = fetch_historical_data(ticker)
+    df = fetch_historical_data()
 
     if df.empty:
         return jsonify({"error": "No historical data found"}), 404
@@ -469,16 +469,40 @@ def alpha_historical_data():
     return jsonify(response_data), 200
 
 
-def predict_next_day_lstm(model, data, features, scaler, time_steps=50):
-    if len(data) < time_steps:
-        print(f"⚠️ Not enough historical data for LSTM prediction. Using last known price instead.")
-        return data["c"].iloc[-1]  # Return last closing price as fallback
-    
-    scaled_features = scaler.transform(data[features][-time_steps:].values)
-    lstm_input = scaled_features.reshape(1, time_steps, len(features))
-    prediction = model.predict(lstm_input)[0, 0]
-    print(f"✅ LSTM Prediction Output: {prediction}")
-    return prediction
+def predict_next_day(model, recent_data, scaler, features):
+    """
+    Predict the next day's value using the LSTM model.
+    """
+    try:
+        if len(recent_data) < 50:
+            print(f"⚠️ Warning: Only {len(recent_data)} rows available. LSTM requires at least 50.")
+            return recent_data["c"].iloc[-1]  # Default to last close price
+
+        # Ensure required features exist
+        missing_features = [f for f in features if f not in recent_data.columns]
+        if missing_features:
+            print(f"⚠️ Warning: Missing features for LSTM: {missing_features}")
+            for feature in missing_features:
+                recent_data[feature] = 0  # Default missing features to 0
+
+        # Extract last 50 rows for LSTM
+        recent_data = recent_data[features].values[-50:]
+
+        # Scale the data
+        recent_scaled = scaler.transform(recent_data)
+
+        # Reshape for LSTM (batch_size=1, time_steps=50, features=len(features))
+        reshaped_data = recent_scaled.reshape(1, 50, len(features))
+
+        # Make LSTM Prediction
+        prediction = model.predict(reshaped_data)[0][0]
+
+        return prediction
+
+    except Exception as e:
+        print(f"❌ ERROR in predict_next_day: {e}")
+        return 0  # Default to 0 in case of failure
+
 
 
 # Function to scan stocks
@@ -794,7 +818,6 @@ def sentiment_plot():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
-
 @app.route('/api/ai-predict', methods=['GET'])
 def ai_predict():
     """
@@ -806,97 +829,101 @@ def ai_predict():
         if not ticker:
             return jsonify({"error": "Ticker is required"}), 400
 
-        # ✅ Fetch and preprocess data
-        df = fetch_historical_data(ticker)
-        df = preprocess_data_with_indicators(df)
-        df = detect_breakouts(df)
-        df = generate_trade_signals(df)
+        print(f"📌 AI Prediction Triggered for Ticker: {ticker}")
 
-        if df.empty:
+        # ✅ Fetch and preprocess data
+        df = fetch_historical_data(ticker)  # ✅ Pass ticker to fetch only relevant data
+        if df is None or df.empty:
+            print("⚠️ No data available after fetching!")
             return jsonify({"error": "No data available for the given ticker"}), 404
+
+        df, scaler = preprocess_data_with_indicators(df)
+        if df.empty:
+            print("⚠️ No data available after preprocessing!")
+            return jsonify({"error": "No data available for the given ticker"}), 404
+
+        print(f"📌 Dataframe Size After Preprocessing: {len(df)} rows")
 
         # ✅ Load XGBoost Model & Features
         try:
             xgb_model = load(XGB_MODEL_PATH)
-            features = load(XGB_FEATURES_PATH)
+            features = load(XGB_FEATURES_PATH)  # Ensure feature names are correctly loaded
+            print("✅ XGBoost Model Loaded Successfully!")
         except Exception as e:
+            print(f"❌ Error loading XGBoost model: {e}")
             return jsonify({"error": f"❌ Error loading XGBoost model: {e}"}), 500
 
-        # ✅ Ensure LSTM Model is Loaded at Startup (Do NOT train again)
-        lstm_model, lstm_scaler = lstm_cache["model"], lstm_cache["scaler"]
-        lstm_available = lstm_model is not None and lstm_scaler is not None
+        # ✅ Load or Train LSTM Model
+        lstm_model, lstm_scaler = lstm_cache.get("model"), lstm_cache.get("scaler")
 
-        if not lstm_available:
-            print("⚠️ LSTM model not found. Using XGBoost only.")
+        if not lstm_model or not lstm_scaler:
+            print("⚠️ LSTM model not found in cache. Attempting to load saved model...")
 
-        # ✅ XGBoost Predictions
-        df["xgboost_prediction"] = xgb_model.predict(df[features])
+            # Attempt to load the saved model first
+            lstm_model, lstm_scaler = load_lstm_model()
 
-        # ✅ Apply LSTM Predictions if available
-        if lstm_available:
-            print("✅ LSTM Model Found. Enhancing AI predictions.")
-
-            # Ensure enough data for LSTM (at least 50 rows)
-            if len(df) >= 50:
-                df["lstm_prediction"] = df.apply(
-                    lambda row: predict_next_day(
-                        model=lstm_model,
-                        recent_data=df,
-                        scaler=lstm_scaler,
-                        features=features
-                    ),
-                    axis=1
-                )
-
-                # ✅ Combine XGBoost & LSTM Predictions
-                xgb_weight = 0.6  # Weight for XGBoost
-                lstm_weight = 0.4  # Weight for LSTM
-                df["ai_prediction"] = (
-                    xgb_weight * df["xgboost_prediction"] +
-                    lstm_weight * (df["lstm_prediction"] / df["c"])  # Ensure 'c' is correct
-                )
-
+            if lstm_model and lstm_scaler:
+                print("✅ Loaded saved LSTM model successfully!")
+                lstm_cache["model"], lstm_cache["scaler"] = lstm_model, lstm_scaler
             else:
-                print(f"⚠️ Not enough data for LSTM (Only {len(df)} rows). Using XGBoost only.")
-                df["ai_prediction"] = df["xgboost_prediction"]
+                print("⚠️ LSTM model is missing! Training a new one...")
+                lstm_model, lstm_scaler = train_and_cache_lstm_model()
+                lstm_cache["model"], lstm_cache["scaler"] = lstm_model, lstm_scaler
 
+        # ✅ Apply XGBoost Predictions
+        df["xgboost_prediction"] = xgb_model.predict(df[features])
+        print("✅ XGBoost Predictions Applied!")
+
+        # ✅ Apply LSTM Predictions if Available
+        time_steps = 50  # FIXED: Ensure consistent LSTM time steps
+        if len(df) >= time_steps:
+            print(f"📌 Applying LSTM on last {time_steps} rows...")
+
+            # ✅ Ensure correct feature order and format
+            df_features = df[features]  # Select only the required features
+            df_scaled = pd.DataFrame(lstm_scaler.transform(df_features), columns=df_features.columns)
+
+            # ✅ Ensure correct input shape (1, 50, num_features)
+            if len(df_scaled) < time_steps:
+                padding = np.zeros((time_steps - len(df_scaled), len(features)))
+                df_scaled_padded = np.vstack([padding, df_scaled.values])
+            else:
+                df_scaled_padded = df_scaled.values[-time_steps:]
+
+            X_lstm = df_scaled_padded.reshape(1, time_steps, len(features))
+
+            # ✅ Make LSTM Prediction
+            lstm_prediction = lstm_model.predict(X_lstm)[0][0]
+            print(f"📌 LSTM Next-Day Prediction: {lstm_prediction}")
+            df["lstm_prediction"] = lstm_prediction
+
+            # ✅ Combine XGBoost & LSTM Predictions
+            xgb_weight, lstm_weight = 0.6, 0.4
+            df["ai_prediction"] = (
+                xgb_weight * df["xgboost_prediction"] +
+                lstm_weight * (df["lstm_prediction"] / df["close"])
+            )
         else:
+            print("⚠️ Not enough data for LSTM. Using XGBoost only.")
             df["ai_prediction"] = df["xgboost_prediction"]
 
-        # ✅ Plot AI Candlestick Chart
-        plot_candlestick_chart(df, ticker)
+        print("✅ AI Predictions Completed!")
 
-        # ✅ Return AI Predictions
+        # ✅ Ensure the index is in datetime format
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index, errors='coerce')
+
         return jsonify({
             "dates": df.index.strftime('%Y-%m-%d').tolist(),
             "predictions": df["ai_prediction"].tolist(),
-            "buy_signals": df[df["buy_signal"] == 1]["c"].tolist(),
-            "sell_signals": df[df["sell_signal"] == 1]["c"].tolist()
+            "buy_signals": df[df["buy_signal"] == 1]["close"].tolist() if "buy_signal" in df.columns else [],
+            "sell_signals": df[df["sell_signal"] == 1]["close"].tolist() if "sell_signal" in df.columns else []
         })
 
     except Exception as e:
         print(f"❌ Error in ai-predict: {e}")
         return jsonify({"error": str(e)}), 500
 
-
-@app.route("/api/train-xgb-optuna", methods=["POST"])
-def train_xgb_optuna_endpoint():
-    """
-    API endpoint to train the XGBoost model using Optuna for hyperparameter tuning.
-    """
-    try:
-        best_model, best_params = train_xgboost_with_optuna()
-        return jsonify({
-            "message": "✅ XGBoost model trained with Optuna successfully!",
-            "best_params": best_params
-        }), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-    except Exception as e:
-        print(f"❌ ERROR in /api/train-xgb: {e}")
-        return jsonify({"error": str(e)}), 500
 @app.route("/api/train-lstm", methods=["POST"])
 def train_lstm():
     """
