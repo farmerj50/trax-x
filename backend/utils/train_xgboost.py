@@ -20,6 +20,8 @@ XGB_FEATURES_PATH = os.path.join(MODELS_DIR, "xgb_features.pkl")
 
 # ✅ Ensure models directory exists
 os.makedirs(MODELS_DIR, exist_ok=True)
+
+
 def objective(trial, X, y):
     try:
         # ✅ Validate scale_pos_weight calculation
@@ -42,8 +44,7 @@ def objective(trial, X, y):
     except Exception as e:
         logging.error(f"❌ ERROR in Optuna objective function: {e}")
         return 0
-
-
+    
 def tune_xgboost_hyperparameters(X_train, y_train, n_trials=50):
     """Uses Optuna to find the best hyperparameters for XGBoost."""
     try:
@@ -61,75 +62,76 @@ def tune_xgboost_hyperparameters(X_train, y_train, n_trials=50):
         sample_weights = compute_sample_weight(class_weight="balanced", y=y_train)
         best_model = XGBClassifier(**best_params, random_state=42, use_label_encoder=False)
         best_model.fit(X_train, y_train, sample_weight=sample_weights)
+        
         return best_model, best_params
 
     except Exception as e:
         logging.error(f"❌ ERROR in tune_xgboost_hyperparameters: {e}")
         return None, {}
-
-def plot_feature_importance(model, feature_names):
-    """Plot the feature importance from the trained XGBoost model."""
-    try:
-        importance = model.get_booster().get_score(importance_type="weight")
-        if not importance:
-            logging.warning("⚠️ No feature importance found in model.")
-            return
-
-        importance_df = pd.DataFrame(importance.items(), columns=["Feature", "Importance"])
-        importance_df = importance_df.sort_values(by="Importance", ascending=False)
-
-        plt.figure(figsize=(10, 6))
-        plt.barh(importance_df["Feature"], importance_df["Importance"], color="skyblue")
-        plt.xlabel("Importance")
-        plt.ylabel("Feature")
-        plt.title("XGBoost Feature Importance")
-        plt.gca().invert_yaxis()
-        plt.show()
-
-    except Exception as e:
-        logging.error(f"❌ ERROR in plot_feature_importance: {e}")
-
+    
 def train_xgboost_with_optuna():
     try:
         logging.info("📌 Fetching historical stock data...")
         df = fetch_historical_data()
+
         if df is None or df.empty:
             raise ValueError("❌ ERROR: No historical stock data available for training.")
 
-        df = preprocess_data_with_indicators(df)
+        # ✅ Ensure `preprocess_data_with_indicators` always returns a tuple
+        processed_result = preprocess_data_with_indicators(df)
 
-        # ✅ Debugging: Ensure buy_signal exists before training
-        logging.info(f"📌 Buy Signal Distribution Before Training:\n{df['buy_signal'].value_counts()}")
+        # ✅ Debugging: Print type of returned value
+        print(f"🔹 Type of processed_result: {type(processed_result)}")
 
-        required_features = ["price_change", "volatility", "volume", "rsi", "macd_diff", "adx", "atr", "mfi"]
-        missing_columns = [col for col in required_features if col not in df.columns]
-        if missing_columns:
-            logging.warning(f"⚠️ Missing columns: {missing_columns}. Filling with 0.")
-            for col in missing_columns:
+        # ✅ Ensure it's a valid tuple
+        if not isinstance(processed_result, tuple) or len(processed_result) != 2:
+            raise TypeError(f"❌ preprocess_data_with_indicators did NOT return a valid tuple! Got: {type(processed_result)}")
+
+        df, _ = processed_result  # ✅ Properly unpack df
+
+        # ✅ Ensure df is a DataFrame before proceeding
+        if not isinstance(df, pd.DataFrame):
+            print(f"❌ ERROR: df is NOT a DataFrame! Instead, it is {type(df)}")
+            raise TypeError("❌ preprocess_data_with_indicators did not return a DataFrame!")
+
+        print(f"🔹 Columns in df: {df.columns.tolist()}")
+
+        # ✅ Ensure required features exist
+        required_features = [
+            "price_change", "volatility", "volume", "rsi",
+            "macd_diff", "adx", "atr", "mfi", "macd_line", "macd_signal"
+        ]
+
+        for col in required_features:
+            if col not in df.columns:
                 df[col] = 0
+                logging.warning(f"⚠️ Missing column '{col}' filled with 0.")
+
+        # ✅ Ensure 'buy_signal' column exists
+        if "buy_signal" not in df.columns:
+            print("❌ ERROR: 'buy_signal' column is missing in DataFrame!")
+            print(f"🔹 Available columns: {df.columns.tolist()}")
+            raise KeyError("❌ 'buy_signal' column is required but missing!")
 
         X = df[required_features]
-        y = df["buy_signal"]  # Ensure this column exists
-
-        logging.info(f"✅ Total Samples: {len(y)}, Buy Signals: {y.sum()}, No-Buy Signals: {(y == 0).sum()}")
+        y = df["buy_signal"]
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         best_model, best_params = tune_xgboost_hyperparameters(X_train, y_train)
 
-        if not best_model or not best_params:
+        if best_model:
+            joblib.dump(best_model, XGB_MODEL_PATH)
+            joblib.dump(required_features, XGB_FEATURES_PATH)  # ✅ Save feature list
+            logging.info(f"✅ XGBoost Model saved at: {XGB_MODEL_PATH}")
+            logging.info(f"✅ Features saved at: {XGB_FEATURES_PATH}")
+        else:
             logging.error("❌ ERROR: Optuna failed to train a valid model.")
-            return None, {}
-
-        plot_feature_importance(best_model, X_train.columns)
-        joblib.dump(best_model, XGB_MODEL_PATH)
-        joblib.dump(list(X.columns), XGB_FEATURES_PATH)
-        logging.info(f"✅ XGBoost Model saved at: {XGB_MODEL_PATH}")
 
         return best_model, best_params
 
     except Exception as e:
-        logging.error(f"❌ ERROR in train_xgboost_with_optuna: {e}")
-        return None, {}
+        logging.error(f"❌ ERROR in train_xgboost_with_optuna: {e}", exc_info=True)
+        return None, None
 
 
 if __name__ == "__main__":

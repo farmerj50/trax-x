@@ -1,66 +1,47 @@
 import os
 import pandas as pd
 import numpy as np
+import logging
 from flask_socketio import emit
 from xgboost import XGBClassifier
-from joblib import load, dump
+from joblib import load
 import requests
 
-# Polygon.io API Key
+# ✅ Polygon.io API Key
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "swpC4ge5_aGqdJll3gplZ6a40ADuwhzG")
 
-# Model file path
-MODEL_DIR = os.path.abspath(r"C:\Users\gabby\trax-x\backend\models")  # Ensure absolute path
+# ✅ Model Paths (Ensure correct model is used)
+MODEL_DIR = os.path.abspath(r"C:\Users\gabby\trax-x\backend\models")
+OPTIMIZED_MODEL_PATH = os.path.join(MODEL_DIR, "optimized_xgb_model.joblib")  # ✅ Correct model
+FEATURES_PATH = os.path.join(MODEL_DIR, "xgb_features.pkl")
+
+# ✅ Ensure model directory exists
 if not os.path.exists(MODEL_DIR):
-    print(f"📁 Creating missing models directory at: {MODEL_DIR}")
-    os.makedirs(MODEL_DIR, exist_ok=True)
-MODEL_PATH = os.path.join(MODEL_DIR, "xgb_model.joblib")
+    logging.error(f"❌ ERROR: Model directory does not exist: {MODEL_DIR}. Training is required!")
+    exit(1)  # Stop execution if model directory is missing
 
-# Feature columns for model training
-feature_columns = ["price_change", "volatility", "volume", "sentiment_score", "rsi", "macd_diff"]
+# ✅ Load Trained Optimized XGBoost Model (NO TRAINING)
+def load_xgboost_model():
+    """
+    Loads the optimized XGBoost model.
+    If missing, logs an error and exits (instead of training).
+    """
+    if not os.path.exists(OPTIMIZED_MODEL_PATH) or not os.path.exists(FEATURES_PATH):
+        logging.error("❌ ERROR: Trained XGBoost model or feature list not found. Train the model first!")
+        exit(1)  # Stop execution if model is missing
 
-# ✅ Ensure the models directory exists before saving/loading the model
-if not os.path.exists(MODEL_DIR):
-    print(f"📁 Creating missing models directory: {MODEL_DIR}")
-    os.makedirs(MODEL_DIR)
+    try:
+        model = load(OPTIMIZED_MODEL_PATH)
+        features = load(FEATURES_PATH)
+        logging.info(f"✅ Successfully loaded optimized XGBoost model from: {OPTIMIZED_MODEL_PATH}")
+        logging.info(f"✅ Features in trained XGBoost model: {features}")
+        return model, features
+    except Exception as e:
+        logging.error(f"❌ ERROR loading optimized XGBoost model: {e}")
+        exit(1)  # Stop execution if model loading fails
 
-# ✅ Load or train the XGBoost model
-def load_or_train_model():
-    if os.path.exists(MODEL_PATH):
-        try:
-            model = load(MODEL_PATH)
-            print(f"✅ Model loaded successfully from {MODEL_PATH}!")
-        except Exception as e:
-            print(f"❌ Error loading the model: {e}. Retraining the model.")
-            model = train_and_save_model()
-    else:
-        print("⚠️ Model file not found. Training a new model.")
-        model = train_and_save_model()
-    return model
-
-# ✅ Train and save the model
-def train_and_save_model():
-    from sklearn.datasets import make_classification
-    from sklearn.model_selection import train_test_split
-
-    print("📌 Training new XGBoost model...")
-
-    # Generate dummy data
-    X, y = make_classification(n_samples=1000, n_features=len(feature_columns), random_state=42)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    # Train the model
-    model = XGBClassifier(n_estimators=300, max_depth=6, learning_rate=0.05, random_state=42)
-    model.fit(X_train, y_train)
-
-    # Save the trained model
-    dump(model, MODEL_PATH)
-    print(f"✅ Model trained and saved successfully at {MODEL_PATH}!")
-
-    return model
-
-# ✅ Load the trained model
-xgb_model = load_or_train_model()
+# ✅ Load the trained optimized model
+xgb_model, feature_columns = load_xgboost_model()
 
 # ✅ Fetch Live Stock Data
 def fetch_live_stock_data(ticker):
@@ -76,7 +57,8 @@ def fetch_live_stock_data(ticker):
             "timestamp": data["results"]["t"]
         }
     except requests.exceptions.RequestException as e:
-        raise ValueError(f"Error fetching live stock data for {ticker}: {e}")
+        logging.error(f"❌ Error fetching live stock data for {ticker}: {e}")
+        return None
 
 # ✅ Preprocess Real-Time Data for AI/ML Prediction
 def preprocess_live_data(price, volume, sentiment_score):
@@ -88,6 +70,11 @@ def preprocess_live_data(price, volume, sentiment_score):
         "sentiment_score": sentiment_score,
         "rsi": np.random.uniform(30, 70),  # Replace with actual RSI calculation
         "macd_diff": np.random.uniform(-1, 1),  # Replace with actual MACD calculation
+        "adx": np.random.uniform(10, 40),
+        "atr": np.random.uniform(0.5, 2),
+        "mfi": np.random.uniform(20, 80),
+        "macd_line": np.random.uniform(-1, 1),
+        "macd_signal": np.random.uniform(-1, 1),
     }
 
 # ✅ Real-Time Stock Tracking via WebSocket
@@ -100,15 +87,17 @@ def track_stock_event(data):
     try:
         # Fetch live stock data
         live_data = fetch_live_stock_data(ticker)
+        if not live_data:
+            return emit("error", {"message": "Failed to fetch live stock data."})
 
         # Preprocess data for prediction
         processed_data = preprocess_live_data(
             live_data["price"], volume=1000, sentiment_score=0.5  # Replace with actual values
         )
-        features = pd.DataFrame([processed_data])[feature_columns]
+        features_df = pd.DataFrame([processed_data])[feature_columns]
 
-        # Predict using the XGBoost model
-        prediction = xgb_model.predict(features)[0]
+        # Predict using the optimized XGBoost model
+        prediction = xgb_model.predict(features_df)[0]
 
         # Emit real-time stock update
         emit("stock_update", {
@@ -119,3 +108,4 @@ def track_stock_event(data):
         })
     except Exception as e:
         emit("error", {"message": str(e)})
+
