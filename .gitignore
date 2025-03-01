@@ -28,4 +28,5 @@ venv/Lib/site-packages/xgboost/lib/xgboost.dll
  Includes/*
  numpy.py
  venv/Lib/xgboost
+ venv/Lib/site-packages/sklearn/utils/
 

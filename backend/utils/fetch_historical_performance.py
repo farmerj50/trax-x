@@ -20,23 +20,34 @@ def get_valid_date():
     Get the most recent valid stock market date (no weekends or future dates).
     """
     today = datetime.utcnow()
-    for i in range(7):  # Check last 7 days
+    for i in range(7):  # ✅ Check last 7 days
         check_date = today - timedelta(days=i)
         if check_date.weekday() < 5:  # ✅ Monday-Friday (0-4)
             return check_date.strftime("%Y-%m-%d")
-    return today.strftime("%Y-%m-%d")  # Fallback
+    return today.strftime("%Y-%m-%d")  # ✅ Fallback
 
 def fetch_historical_data():
     """
     Fetch historical stock data from Polygon.io.
-    If today's data is missing, it falls back to the most recent available trading day.
+    Ensures it does not request today’s data, weekends, or future dates.
     """
     for i in range(360):  # ✅ Try fetching data for the last 360 days
-        most_recent_date = datetime.utcnow() - timedelta(days=i)  # ✅ Ensure UTC consistency
+        most_recent_date = datetime.utcnow() - timedelta(days=i)
         most_recent_date_str = most_recent_date.strftime("%Y-%m-%d")
+
+        # ✅ Skip today's data (Polygon.io restricts same-day access)
+        if most_recent_date.date() == datetime.utcnow().date():
+            logging.info(f"🚫 Skipping today's data: {most_recent_date_str}")
+            continue  # ✅ Skip today's date
+        
+        # ✅ Skip weekends (Saturday=5, Sunday=6)
+        if most_recent_date.weekday() >= 5:
+            logging.info(f"🚫 Skipping weekend: {most_recent_date_str}")
+            continue  # ✅ Skip weekends
+        
         logging.info(f"🔍 Attempting to fetch stock data for: {most_recent_date_str}")
 
-        # ✅ Check if data is already cached
+        # ✅ Check cache first
         if most_recent_date_str in historical_data_cache:
             logging.info(f"✅ Returning cached data for {most_recent_date_str}")
             return historical_data_cache[most_recent_date_str]
@@ -69,17 +80,22 @@ def fetch_historical_data():
                 }
                 df.rename(columns=rename_mapping, inplace=True)
 
-                # ✅ Preserve ticker column
+                # ✅ Explicitly check `ticker` column BEFORE processing
                 if "ticker" not in df.columns:
-                    df["ticker"] = "UNKNOWN"  # Assign default placeholder if missing
-                    logging.warning("⚠️ 'ticker' column was missing! Placeholder added.")
+                    logging.error("❌ ERROR: 'ticker' column is missing in raw data!")
+                    return pd.DataFrame(columns=["ticker", "volume", "vwap", "open", "close", "high", "low", "timestamp", "trade_count"])
 
-                logging.info(f"📌 Columns in DataFrame: {df.columns.tolist()}")
+                # ✅ Ensure `ticker` is a string & not missing values
+                df["ticker"] = df["ticker"].astype(str)
+                df = df[df["ticker"].notna()]  # Remove any missing ticker rows
+                
+                # ✅ Log fetched tickers for debugging
+                unique_tickers = df["ticker"].unique()
+                logging.info(f"📌 Tickers Fetched: {unique_tickers[:10]}")  # Show first 10 tickers
 
-                # ✅ Cache the retrieved data to avoid redundant API calls
+                # ✅ Cache and return the data
                 historical_data_cache[most_recent_date_str] = df
-
-                return df  # ✅ Return the first valid data found
+                return df
 
             logging.warning(f"⚠️ No stock data found for {most_recent_date_str}")
 
@@ -96,6 +112,4 @@ def fetch_historical_data():
             logging.error(f"❌ Unexpected error: {e}")
 
     logging.warning("❌ Unable to fetch stock data. Returning empty DataFrame.")
-
-    # ✅ Ensure `df` is always defined
     return pd.DataFrame(columns=["ticker", "volume", "vwap", "open", "close", "high", "low", "timestamp", "trade_count"])

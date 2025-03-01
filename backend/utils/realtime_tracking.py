@@ -10,7 +10,7 @@ import requests
 # ✅ Polygon.io API Key
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "swpC4ge5_aGqdJll3gplZ6a40ADuwhzG")
 
-# ✅ Model Paths (Ensure correct model is used)
+# ✅ Model Paths (Ensure correct model is used)z
 MODEL_DIR = os.path.abspath(r"C:\Users\gabby\trax-x\backend\models")
 OPTIMIZED_MODEL_PATH = os.path.join(MODEL_DIR, "optimized_xgb_model.joblib")  # ✅ Correct model
 FEATURES_PATH = os.path.join(MODEL_DIR, "xgb_features.pkl")
