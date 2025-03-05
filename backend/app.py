@@ -605,41 +605,19 @@ def scan_stocks():
         # ✅ Filter selected stocks
         xgb_filtered_data = filtered_data.loc[xgb_predictions == 1].copy()
 
-        # ✅ Retry logic for restoring 'T' column
-        retries = 3
-        for attempt in range(retries):
-            try:
-                logging.info(f"🔄 Attempt {attempt+1}: Restoring 'T' column...")
-
-                # Restore 'T' column after filtering
-                if 'T' not in xgb_filtered_data.columns:
-                    xgb_filtered_data['T'] = tickers_xgb.loc[xgb_filtered_data.index, 'ticker']
-
-                # ✅ Check if 'T' column is fully restored
-                if 'T' in xgb_filtered_data.columns and xgb_filtered_data['T'].isnull().sum() == 0:
-                    logging.info("✅ 'T' column successfully restored!")
-                    break
-
-                logging.warning(f"⚠️ Attempt {attempt+1}: 'T' column not fully restored. Retrying...")
-                time.sleep(2)
-
-            except Exception as e:
-                logging.error(f"❌ Attempt {attempt+1}: Error restoring 'T' column: {e}")
-                time.sleep(2)
+        # ✅ Restore 'T' column from tickers_xgb
+        if 'T' not in xgb_filtered_data.columns:
+            logging.info("🔄 Attempting to restore 'T' column from tickers_xgb...")
+            xgb_filtered_data = xgb_filtered_data.merge(tickers_xgb, left_index=True, right_index=True, how="left")
+            xgb_filtered_data.rename(columns={"ticker": "T"}, inplace=True)
 
         # ✅ Final validation for 'T' column
         if 'T' not in xgb_filtered_data.columns or xgb_filtered_data['T'].isnull().sum() > 0:
-            logging.error("❌ ERROR: 'T' column is missing or contains NaN even after retries!")
+            logging.error("❌ ERROR: 'T' column is missing or contains NaN even after restoring!")
             return jsonify({"error": "'T' column missing after XGBoost filtering"}), 500
 
         # 🔹 **Final Logging Before Sending Response**
-        logging.info("📌 Checking final stock candidates before returning to frontend...")
-        logging.info(f"📌 Columns in xgb_filtered_data: {xgb_filtered_data.columns.tolist()}")
-
-        if "T" in xgb_filtered_data.columns:
-            logging.info(f"📌 Final stock candidates for frontend (T values): {xgb_filtered_data[['T', 'c']].to_dict(orient='records')}")
-        else:
-            logging.error("❌ ERROR: 'T' column is STILL MISSING before returning to frontend!")
+        logging.info(f"📌 Final stock candidates for frontend (T values): {xgb_filtered_data[['T', 'c']].to_dict(orient='records')}")
 
         # ✅ Save after XGBoost
         xgb_csv_path = os.path.join(LOG_DIR, "filtered_after_xgboost.csv")
@@ -651,6 +629,7 @@ def scan_stocks():
     except Exception as e:
         logging.error(f"❌ ERROR in scan-stocks: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
 
 # Function to predict the next day using LSTM
 def predict_next_day(model, recent_data, scaler, features):
@@ -1497,22 +1476,24 @@ def scan_stocks():
             logging.warning("⚠️ No stock data available!")
             return jsonify({"error": "No stock data available"}), 404
 
-        # ✅ Ensure 'ticker' column exists BEFORE filtering
+        # ✅ Ensure 'ticker' column exists before encoding
         if "ticker" not in data.columns:
-            logging.error("❌ ERROR: 'ticker' column is missing BEFORE filtering!")
+            logging.error("❌ ERROR: 'ticker' column is missing!")
             return jsonify({"error": "'ticker' column missing from data"}), 500
 
-        # ✅ Store tickers separately before filtering
+        # ✅ Preserve ticker column before filtering
         tickers_df = data[["ticker"]].copy()
 
         # ✅ Apply feature engineering
         data, _ = preprocess_data_with_indicators(data)
 
         # ✅ Ensure feature order is correct
-        trained_features = joblib.load(XGB_FEATURES_PATH)  # Load feature order used in training
+        trained_features = joblib.load(XGB_FEATURES_PATH)
         for feature in trained_features:
             if feature not in data.columns:
-                data[feature] = 0  # Add missing features
+                data[feature] = 0
+
+        logging.info(f"📌 Features in dataset before filtering: {data.columns.tolist()}")
 
         # ✅ Apply filtering conditions
         filtered_data = data[(data["close"] >= min_price) & (data["close"] <= max_price)]
@@ -1527,11 +1508,6 @@ def scan_stocks():
         filtered_csv_path = os.path.join(LOG_DIR, "filtered_before_xgboost.csv")
         filtered_data.to_csv(filtered_csv_path, index=False)
         logging.info(f"✅ Saved filtered stocks before XGBoost at {filtered_csv_path}")
-
-        # ✅ Ensure ticker column exists BEFORE prediction
-        if "ticker" not in filtered_data.columns:
-            logging.warning("⚠️ 'ticker' column was dropped BEFORE XGBoost. Restoring it...")
-            filtered_data["ticker"] = tickers_df.loc[filtered_data.index, "ticker"]
 
         # ✅ Load XGBoost Model
         xgb_model = joblib.load(XGB_MODEL_PATH)
@@ -1548,10 +1524,35 @@ def scan_stocks():
         # ✅ Filter selected stocks
         xgb_filtered_data = filtered_data.loc[xgb_predictions == 1].copy()
 
-        # ✅ Final check: Ensure ticker column exists AFTER XGBoost
-        if "ticker" not in xgb_filtered_data.columns:
-            logging.warning("⚠️ 'ticker' column missing AFTER XGBoost. Restoring it...")
-            xgb_filtered_data["ticker"] = tickers_xgb.loc[xgb_filtered_data.index, "ticker"]
+        # 🔄 **Retry Logic for Restoring 'T' Column**
+        retries = 3
+        for attempt in range(retries):
+            try:
+                logging.info(f"🔄 Attempt {attempt+1}: Restoring 'T' column...")
+
+                # ✅ Restore 'T' column by merging original tickers back
+                xgb_filtered_data = xgb_filtered_data.merge(tickers_xgb, left_index=True, right_index=True, how="left")
+                xgb_filtered_data.rename(columns={"ticker": "T"}, inplace=True)
+
+                # ✅ Verify 'T' column is restored
+                if 'T' in xgb_filtered_data.columns and xgb_filtered_data['T'].notnull().all():
+                    logging.info("✅ 'T' column successfully restored!")
+                    break
+
+                logging.warning(f"⚠️ Attempt {attempt+1}: 'T' column still contains NaN values. Retrying...")
+                time.sleep(2)
+
+            except Exception as e:
+                logging.error(f"❌ Attempt {attempt+1}: Error restoring 'T' column: {e}")
+                time.sleep(2)
+
+        # ✅ Final validation for 'T' column
+        if 'T' not in xgb_filtered_data.columns or xgb_filtered_data['T'].isnull().sum() > 0:
+            logging.error("❌ ERROR: 'T' column is STILL MISSING before returning to frontend!")
+            return jsonify({"error": "'T' column missing after XGBoost filtering"}), 500
+
+        # 🔹 **Final Logging Before Sending Response**
+        logging.info(f"📌 Final stock candidates for frontend (T values): {xgb_filtered_data[['T', 'close']].to_dict(orient='records')}")
 
         # ✅ Save after XGBoost
         xgb_csv_path = os.path.join(LOG_DIR, "filtered_after_xgboost.csv")
@@ -1563,6 +1564,8 @@ def scan_stocks():
     except Exception as e:
         logging.error(f"❌ ERROR in scan-stocks: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
 
 # Function to predict the next day using LSTM
 def predict_next_day(model, recent_data, scaler, features):
