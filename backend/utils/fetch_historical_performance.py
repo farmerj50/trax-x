@@ -31,7 +31,7 @@ def fetch_historical_data():
     Fetch historical stock data from Polygon.io.
     Ensures it does not request today’s data, weekends, or future dates.
     """
-    for i in range(360):  # ✅ Try fetching data for the last 360 days
+    for i in range(720):  # ✅ Try fetching data for the last 360 days
         most_recent_date = datetime.utcnow() - timedelta(days=i)
         most_recent_date_str = most_recent_date.strftime("%Y-%m-%d")
 

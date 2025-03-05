@@ -16,26 +16,35 @@ const TickerNewsWidget = ({ tickers }) => {
 
     const fetchNewsForTickers = async () => {
       setLoading(true);
-      const tickerString = tickers.join(",");  // ✅ Convert to comma-separated string
-      console.log(`📌 Fetching news for tickers: ${tickerString}`);
-
-      try {
-        const response = await fetch(`http://localhost:5000/api/ticker-news?ticker=${tickerString}`);
-        const data = await response.json();
-        console.log("📌 API Response:", data);
-
-        if (data.error) {
-          console.error("❌ Error from API:", data.error);
+  
+      if (!tickers || tickers.length === 0) {
+          console.warn("⚠️ No tickers provided. News request will not be sent.");
           setNews({});
-        } else {
-          setNews(data);
-        }
-      } catch (error) {
-        console.error("❌ Error fetching news:", error);
-      } finally {
-        setLoading(false);
+          setLoading(false);
+          return;
       }
-    };
+  
+      const tickerString = tickers.join(",");
+      console.log(`📌 Fetching news for tickers: ${tickerString}`);
+  
+      try {
+          const response = await fetch(`http://localhost:5000/api/ticker-news?ticker=${tickerString}`);
+          const data = await response.json();
+          console.log("📌 API Response:", data);
+  
+          if (data.error) {
+              console.error("❌ Error from API:", data.error);
+              setNews({});
+          } else {
+              setNews(data);
+              console.log("📌 News received in TickerNewsWidget:", data);
+          }
+      } catch (error) {
+          console.error("❌ Error fetching news:", error);
+      } finally {
+          setLoading(false);
+      }
+  };
 
     fetchNewsForTickers();
   }, [tickers]);
@@ -47,6 +56,7 @@ const TickerNewsWidget = ({ tickers }) => {
   if (Object.keys(news).length === 0) {
     return <div className="news-widget">No news available for the selected stocks.</div>;
   }
+  
 
   return (
     <div className="news-widget">
@@ -64,7 +74,6 @@ const TickerNewsWidget = ({ tickers }) => {
                 </h6>
                 <p><strong>Author:</strong> {article.author}</p>
 
-                {/* ✅ FIX: Extract publisher name properly */}
                 <p><strong>Publisher:</strong> {typeof article.publisher === "object" ? article.publisher.name : "Unknown Publisher"}</p>
 
                 <p><strong>Published:</strong> {new Date(article.published_utc).toLocaleString()}</p>

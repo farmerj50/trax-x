@@ -82,7 +82,7 @@ const StockScanner = ({ stocks, loading }) => {
                   {/* Chart Section */}
                   <div className="stock-chart">
                     <CandlestickChart
-                      ticker={ticker}  // ✅ Pass correct ticker
+                      ticker={ticker}  // ✅ Pass correct ticker to chart
                       entryPoint={stock.c ? stock.c * 0.95 : null}
                       exitPoint={stock.c ? stock.c * 1.1 : null}
                     />
@@ -96,6 +96,13 @@ const StockScanner = ({ stocks, loading }) => {
             </p>
           )}
         </div>
+      )}
+
+      {/* ✅ Pass tickers to the news widget the original way */}
+      {stocks.length > 0 && (
+        <TickerNewsWidget
+          tickers={stocks.map((stock) => stock.T).filter(Boolean)} // ✅ Pass T values only
+        />
       )}
     </div>
   );

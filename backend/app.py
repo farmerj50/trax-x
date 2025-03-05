@@ -162,25 +162,35 @@ def check_and_train_models():
 
 
     print("✅ Model check complete. Both XGBoost & LSTM are ready.")
+def classify_sentiment(score):
+    """
+    Convert a VADER compound sentiment score into a label.
+    """
+    if score >= 0.05:
+        return "positive"
+    elif score <= -0.05:
+        return "negative"
+    else:
+        return "neutral"
 
 def fetch_and_process_sentiment_data(ticker):
     """
-    Fetch sentiment data for the given ticker from news sources and apply VADER sentiment analysis.
+    Fetch sentiment data for the given ticker from news sources, apply VADER sentiment analysis, 
+    and classify sentiment as positive, neutral, or negative.
     """
     try:
         # Fetch news articles for the ticker
         news_data = fetch_ticker_news(ticker)
 
-        # Analyze sentiment
-        sentiment_scores = [analyzer.polarity_scores(article["title"])["compound"] for article in news_data]
+        # Process and analyze sentiment for each article
+        for article in news_data:
+            sentiment_score = analyzer.polarity_scores(article["title"])["compound"]
+            article["sentiment"] = classify_sentiment(sentiment_score)
 
-        # Compute average sentiment score
-        avg_sentiment = np.mean(sentiment_scores) if sentiment_scores else 0
-
-        return avg_sentiment
+        return news_data  # Return enriched articles with sentiment labels
     except Exception as e:
         print(f"❌ Error fetching sentiment data: {e}")
-        return 0  # Default to neutral sentiment
+        return []
 
 def subscribe_to_tickers(ws):
     if tickers:
@@ -377,6 +387,8 @@ def fetch_sentiment_score_alpha(ticker):
     """Fetch market sentiment score for a given stock ticker using Alpha Vantage API."""
     API_KEY = os.getenv("3R7BUV52GH1MOHNO")
     url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={ticker}&apikey={API_KEY}"
+    
+    logging.info("!!! are tickers here: {ticker}: {e}")
 
     try:
         response = requests.get(url)
@@ -399,7 +411,7 @@ def analyze_sentiment(text):
     """
     sentiment = analyzer.polarity_scores(text)
     return sentiment["compound"]
-import numpy as np
+
 
 def detect_breakouts(data, window=20, threshold=1.02):
     """
@@ -562,6 +574,8 @@ def scan_stocks():
             if feature not in data.columns:
                 data[feature] = 0  # Add missing features
 
+        logging.info(f"📌 Features in dataset before filtering: {data.columns.tolist()}")
+
         # ✅ Apply filtering conditions
         filtered_data = data[(data["close"] >= min_price) & (data["close"] <= max_price)]
         filtered_data = filtered_data[filtered_data["volume_surge"] > volume_surge]
@@ -591,32 +605,41 @@ def scan_stocks():
         # ✅ Filter selected stocks
         xgb_filtered_data = filtered_data.loc[xgb_predictions == 1].copy()
 
-        # ✅ Retry logic for restoring ticker column
-        retries = 3  # Number of attempts
+        # ✅ Retry logic for restoring 'T' column
+        retries = 3
         for attempt in range(retries):
             try:
-                logging.info(f"🔄 Attempt {attempt+1}: Restoring ticker column...")
+                logging.info(f"🔄 Attempt {attempt+1}: Restoring 'T' column...")
 
-                # Restore ticker column after filtering
-                xgb_filtered_data["ticker"] = tickers_xgb.loc[xgb_filtered_data.index, "ticker"]
+                # Restore 'T' column after filtering
+                if 'T' not in xgb_filtered_data.columns:
+                    xgb_filtered_data['T'] = tickers_xgb.loc[xgb_filtered_data.index, 'ticker']
 
-                # ✅ Check if ticker column is fully restored
-                if "ticker" in xgb_filtered_data.columns and xgb_filtered_data["ticker"].isnull().sum() == 0:
-                    logging.info("✅ Ticker column successfully restored!")
+                # ✅ Check if 'T' column is fully restored
+                if 'T' in xgb_filtered_data.columns and xgb_filtered_data['T'].isnull().sum() == 0:
+                    logging.info("✅ 'T' column successfully restored!")
                     break
 
-                # ✅ If not restored, wait and retry
-                logging.warning(f"⚠️ Attempt {attempt+1}: Ticker column not fully restored. Retrying...")
-                time.sleep(2)  # Wait before retrying
-
-            except Exception as e:
-                logging.error(f"❌ Attempt {attempt+1}: Error restoring ticker column: {e}")
+                logging.warning(f"⚠️ Attempt {attempt+1}: 'T' column not fully restored. Retrying...")
                 time.sleep(2)
 
-        # ✅ Final check: Ensure ticker column is restored before proceeding
-        if "ticker" not in xgb_filtered_data.columns or xgb_filtered_data["ticker"].isnull().sum() > 0:
-            logging.error("❌ ERROR: 'ticker' column is missing or contains NaN even after retries!")
-            return jsonify({"error": "'ticker' missing after XGBoost, even after retries"}), 500
+            except Exception as e:
+                logging.error(f"❌ Attempt {attempt+1}: Error restoring 'T' column: {e}")
+                time.sleep(2)
+
+        # ✅ Final validation for 'T' column
+        if 'T' not in xgb_filtered_data.columns or xgb_filtered_data['T'].isnull().sum() > 0:
+            logging.error("❌ ERROR: 'T' column is missing or contains NaN even after retries!")
+            return jsonify({"error": "'T' column missing after XGBoost filtering"}), 500
+
+        # 🔹 **Final Logging Before Sending Response**
+        logging.info("📌 Checking final stock candidates before returning to frontend...")
+        logging.info(f"📌 Columns in xgb_filtered_data: {xgb_filtered_data.columns.tolist()}")
+
+        if "T" in xgb_filtered_data.columns:
+            logging.info(f"📌 Final stock candidates for frontend (T values): {xgb_filtered_data[['T', 'c']].to_dict(orient='records')}")
+        else:
+            logging.error("❌ ERROR: 'T' column is STILL MISSING before returning to frontend!")
 
         # ✅ Save after XGBoost
         xgb_csv_path = os.path.join(LOG_DIR, "filtered_after_xgboost.csv")
@@ -628,7 +651,6 @@ def scan_stocks():
     except Exception as e:
         logging.error(f"❌ ERROR in scan-stocks: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
-
 
 # Function to predict the next day using LSTM
 def predict_next_day(model, recent_data, scaler, features):
@@ -790,33 +812,6 @@ def candlestick_chart():
         print(f"Unexpected error for ticker {ticker}: {e}")
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
-@app.route("/api/ticker-news", methods=["GET"])
-def ticker_news():
-    tickers = request.args.get("ticker")  # Expect comma-separated tickers
-    if not tickers:
-        logging.warning("⚠️ No ticker provided in request.")
-        return jsonify({"error": "Ticker is required"}), 400
-
-    ticker_list = tickers.split(",")  # Split tickers into a list
-    logging.info(f"📌 Fetching news for tickers: {ticker_list}")
-
-    all_news = {}
-
-    for ticker in ticker_list:
-        url = f"https://api.polygon.io/v2/reference/news?ticker={ticker}&limit=5&apiKey={POLYGON_API_KEY}"
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            all_news[ticker] = response.json().get("results", [])
-        except requests.exceptions.HTTPError as e:
-            logging.error(f"❌ Error fetching news for {ticker}: {str(e)}")
-            all_news[ticker] = {"error": f"Error fetching news for {ticker}: {str(e)}"}
-        except Exception as e:
-            logging.error(f"❌ Unexpected error fetching news for {ticker}: {str(e)}")
-            all_news[ticker] = {"error": f"Unexpected error: {str(e)}"}
-
-    logging.info(f"📌 News response: {all_news}")  # ✅ Log full response
-    return jsonify(all_news)  # Return news grouped by ticker
 
 @app.route('/api/sentiment-plot', methods=['GET'])
 def sentiment_plot():
@@ -1095,24 +1090,6 @@ if not ALPHA_VANTAGE_API_KEY:
 latest_stock_prices = {}  # Store the latest stock prices
 # Function to subscribe to tickers in WebSocket connection
 
-def fetch_and_process_sentiment_data(ticker):
-    """
-    Fetch sentiment data for the given ticker from news sources and apply VADER sentiment analysis.
-    """
-    try:
-        # Fetch news articles for the ticker
-        news_data = fetch_ticker_news(ticker)
-
-        # Analyze sentiment
-        sentiment_scores = [analyzer.polarity_scores(article["title"])["compound"] for article in news_data]
-
-        # Compute average sentiment score
-        avg_sentiment = np.mean(sentiment_scores) if sentiment_scores else 0
-
-        return avg_sentiment
-    except Exception as e:
-        print(f"❌ Error fetching sentiment data: {e}")
-        return 0  # Default to neutral sentiment
 
 def subscribe_to_tickers(ws):
     if tickers:
