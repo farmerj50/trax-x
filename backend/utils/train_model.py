@@ -238,22 +238,49 @@ def load_lstm_model():
 def train_and_cache_lstm_model():
     """
     Train the LSTM model and cache it for future use.
+    Ensures the model is only trained if it doesn't already exist.
     """
     try:
+        logger.info("🚀 Checking for existing LSTM model before training...")
+
+        # ✅ First, try to load an existing model
+        model, scaler = load_lstm_model()
+        if model is not None and scaler is not None:
+            logger.info("✅ Pre-trained LSTM model detected. Skipping retraining.")
+            lstm_cache["model"], lstm_cache["scaler"] = model, scaler  # Cache loaded model
+            return model, scaler
+
+        # 🚨 LOGGING ADDED: If model is missing, log the issue
+        if model is None:
+            logger.warning("⚠️ No LSTM model found! Expected at:")
+            logger.warning(f"🔍 {LSTM_MODEL_PATH_KERAS}")
+            logger.warning(f"🔍 {LSTM_MODEL_PATH_H5}")
+
+        if scaler is None:
+            logger.warning("⚠️ No LSTM scaler found! Expected at:")
+            logger.warning(f"🔍 {LSTM_SCALER_PATH}")
+
+        # ✅ If no model is found, proceed to training
+        logger.warning("⚠️ No LSTM model found. Training a new model...")
+
         logger.info("📌 Fetching historical stock data...")
         data = fetch_historical_data()
-
         if data is None or data.empty:
             raise ValueError("❌ No historical data available for training.")
 
         # ✅ Preprocess Data (Ensure features are present)
         data, _ = preprocess_data_with_indicators(data)
 
-        # ✅ Define the required feature set
-        trained_features = [
-            "price_change", "volatility", "volume", "rsi",
-            "macd_diff", "adx", "atr", "mfi", "macd_line", "macd_signal"
-        ]
+        # ✅ Load trained XGBoost feature set to maintain consistency
+        try:
+            trained_features = joblib.load(XGB_FEATURES_PATH)
+            logger.info(f"✅ Loaded trained feature set: {trained_features}")
+        except FileNotFoundError:
+            trained_features = [
+                "price_change", "volatility", "volume", "rsi",
+                "macd_diff", "adx", "atr", "mfi", "macd_line", "macd_signal"
+            ]
+            logger.warning("⚠️ No saved feature list found. Using default feature set.")
 
         # ✅ Ensure all required features exist in `data`
         for feature in trained_features:
@@ -267,16 +294,26 @@ def train_and_cache_lstm_model():
         # ✅ Extract only required features
         data = data[trained_features]
 
-        # ✅ Train Model (Now calling `train_cnn_lstm_model()` correctly)
+        # ✅ Train Model
         model, scaler = train_cnn_lstm_model()
 
-        # ✅ Cache the model
-        lstm_cache["model"], lstm_cache["scaler"] = model, scaler
+        if model is None or scaler is None:
+            logger.error("❌ Training failed! Model or scaler is None.")
+            return None, None  # Prevents caching a broken model
 
+        # ✅ Save Model & Scaler
+        model.save(LSTM_MODEL_PATH_KERAS)
+        joblib.dump(scaler, LSTM_SCALER_PATH)
+
+        logger.info(f"✅ Model saved at: {LSTM_MODEL_PATH_KERAS}")
+        logger.info(f"✅ Scaler saved at: {LSTM_SCALER_PATH}")
+
+        # ✅ Cache the newly trained model
+        lstm_cache["model"], lstm_cache["scaler"] = model, scaler
         return model, scaler
 
     except Exception as e:
-        logger.error(f"❌ Error training and saving LSTM model: {e}")
+        logger.error(f"❌ Error training and saving LSTM model: {e}", exc_info=True)
         return None, None  # Prevent app crash
 
 def predict_next_day(model, recent_data, scaler, features):

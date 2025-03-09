@@ -9,6 +9,8 @@ import threading
 from datetime import datetime, timedelta
 import time
 from sklearn.preprocessing import LabelEncoder
+import tensorflow as tf
+
 
 
 # ✅ WebSocket & Flask SocketIO
@@ -49,6 +51,9 @@ from utils.train_xgboost import tune_xgboost_hyperparameters
 
 import logging
 
+logging.basicConfig(level=logging.INFO)
+
+
 MODELS_DIR = r"C:\Users\gabby\trax-x\backend\models"
 LSTM_MODEL_PATH = os.path.join(MODELS_DIR, "cnn_lstm_attention_model.keras")
 SCALER_PATH = os.path.join(MODELS_DIR, "cnn_lstm_attention_scaler.pkl")
@@ -86,6 +91,12 @@ if lstm_cache["model"] is None or lstm_cache["scaler"] is None:
     print("✅ Checking for saved LSTM model...")
 
     model, scaler = load_lstm_model()
+    if isinstance(model, tuple):
+     logging.error(f"❌ ERROR: LSTM model is returning a tuple instead of a valid model! Type: {type(model)}")
+    elif model is None:
+     logging.warning("⚠️ LSTM model is missing. Falling back to XGBoost.")
+    else:
+     logging.info(f"✅ Loaded LSTM model successfully. Type: {type(model)}")
 
     if model is not None and scaler is not None:
        lstm_cache["model"], lstm_cache["scaler"] = model, scaler
@@ -536,6 +547,8 @@ def alpha_historical_data():
 # Function to scan stocks
 import time
 
+import time
+
 @app.route('/api/scan-stocks', methods=['GET'])
 def scan_stocks():
     try:
@@ -568,11 +581,11 @@ def scan_stocks():
         # ✅ Apply feature engineering
         data, _ = preprocess_data_with_indicators(data)
 
-        # ✅ Ensure feature order is correct
-        trained_features = joblib.load(XGB_FEATURES_PATH)  # Load feature order used in training
+        # ✅ Load XGBoost Features
+        trained_features = joblib.load(XGB_FEATURES_PATH)
         for feature in trained_features:
             if feature not in data.columns:
-                data[feature] = 0  # Add missing features
+                data[feature] = 0  # ✅ Fill missing features with 0
 
         logging.info(f"📌 Features in dataset before filtering: {data.columns.tolist()}")
 
@@ -585,6 +598,8 @@ def scan_stocks():
             logging.warning("⚠️ No stocks left after filtering!")
             return jsonify({"error": "No stocks left after filtering!"}), 404
 
+        logging.info(f"📌 Stocks after all filtering steps: {len(filtered_data)}")
+
         # ✅ Save before XGBoost
         filtered_csv_path = os.path.join(LOG_DIR, "filtered_before_xgboost.csv")
         filtered_data.to_csv(filtered_csv_path, index=False)
@@ -594,7 +609,11 @@ def scan_stocks():
         xgb_model = joblib.load(XGB_MODEL_PATH)
 
         # ✅ Ensure correct feature order for prediction
-        xgb_input = filtered_data[trained_features]
+        try:
+            xgb_input = filtered_data[trained_features]
+        except KeyError as e:
+            logging.error(f"❌ ERROR: Missing features in dataset: {e}")
+            return jsonify({"error": "Missing features for XGBoost"}), 500
 
         # ✅ Store tickers before filtering
         tickers_xgb = filtered_data[["ticker"]].copy()
@@ -605,26 +624,64 @@ def scan_stocks():
         # ✅ Filter selected stocks
         xgb_filtered_data = filtered_data.loc[xgb_predictions == 1].copy()
 
-        # ✅ Restore 'T' column from tickers_xgb
-        if 'T' not in xgb_filtered_data.columns:
-            logging.info("🔄 Attempting to restore 'T' column from tickers_xgb...")
-            xgb_filtered_data = xgb_filtered_data.merge(tickers_xgb, left_index=True, right_index=True, how="left")
-            xgb_filtered_data.rename(columns={"ticker": "T"}, inplace=True)
+        logging.info(f"📌 Stocks selected after XGBoost: {len(xgb_filtered_data)}")
 
-        # ✅ Final validation for 'T' column
-        if 'T' not in xgb_filtered_data.columns or xgb_filtered_data['T'].isnull().sum() > 0:
-            logging.error("❌ ERROR: 'T' column is missing or contains NaN even after restoring!")
+        # ✅ Attempt multiple retries to merge 'ticker' column
+        max_retries = 5
+        retry_delay = 2  # Wait 2 seconds before each retry
+
+        for attempt in range(max_retries):
+            try:
+                xgb_filtered_data = xgb_filtered_data.merge(tickers_xgb, left_index=True, right_index=True, how="left")
+                xgb_filtered_data.rename(columns={"ticker": "T"}, inplace=True)
+
+                if "T" in xgb_filtered_data.columns and xgb_filtered_data["T"].notnull().all():
+                    logging.info(f"✅ Successfully appended 'T' column on attempt {attempt + 1}.")
+                    break  # Exit loop if successful
+                else:
+                    logging.warning(f"⚠️ Attempt {attempt + 1}: 'T' column still missing. Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+            except Exception as e:
+                logging.error(f"❌ ERROR merging tickers on attempt {attempt + 1}: {e}", exc_info=True)
+                time.sleep(retry_delay)
+
+        # ✅ Final check for 'T' column before proceeding
+        if "T" not in xgb_filtered_data.columns or xgb_filtered_data["T"].isnull().sum() > 0:
+            logging.error("❌ ERROR: 'T' column is STILL MISSING before returning to frontend!")
             return jsonify({"error": "'T' column missing after XGBoost filtering"}), 500
 
-        # 🔹 **Final Logging Before Sending Response**
-        logging.info(f"📌 Final stock candidates for frontend (T values): {xgb_filtered_data[['T', 'c']].to_dict(orient='records')}")
+        if "ticker" not in xgb_filtered_data.columns:
+            xgb_filtered_data["ticker"] = xgb_filtered_data["T"]
+
+        # ✅ Final Logging Before AI Prediction
+        logging.info(f"📌 Final stock candidates for frontend (T values): {xgb_filtered_data[['T', 'close']].to_dict(orient='records')}")
 
         # ✅ Save after XGBoost
         xgb_csv_path = os.path.join(LOG_DIR, "filtered_after_xgboost.csv")
         xgb_filtered_data.to_csv(xgb_csv_path, index=False)
         logging.info(f"✅ Saved filtered stocks after XGBoost at {xgb_csv_path}")
 
-        return jsonify({"candidates": xgb_filtered_data.to_dict(orient="records")}), 200
+        # ✅ Ensure LSTM Gets Data
+        if xgb_filtered_data.empty:
+            logging.warning("⚠️ No stocks available for LSTM!")
+            return jsonify({"candidates": []}), 200
+
+        logging.info(f"🚀 Calling ai_predict() with {len(xgb_filtered_data)} stocks")
+
+        # ✅ Ensure Saved Model is Used Instead of Retraining
+        try:
+            model, scaler = load_lstm_model()  # ✅ Load BOTH model and scaler
+            if model is None or scaler is None:
+                logging.error("❌ ERROR: LSTM model or scaler is missing, falling back to XGBoost-only predictions.")
+                return jsonify({"candidates": xgb_filtered_data.to_dict(orient="records")}), 200
+
+            # ✅ Pass Data to AI Predictor
+            response = ai_predict(model, xgb_filtered_data, scaler)  # Pass BOTH to ai_predict
+            logging.info("✅ ai_predict() executed successfully.")
+            return response
+        except Exception as e:
+            logging.error(f"❌ ERROR in ai_predict(): {e}", exc_info=True)
+            return jsonify({"error": "AI prediction failed"}), 500
 
     except Exception as e:
         logging.error(f"❌ ERROR in scan-stocks: {e}", exc_info=True)
@@ -837,134 +894,84 @@ def sentiment_plot():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
-@app.route('/api/ai-predict', methods=['GET'])
-def ai_predict():
+import tensorflow as tf  # Ensure TensorFlow is properly imported
+
+import tensorflow as tf  # Ensure TensorFlow is imported
+
+def ai_predict(model, filtered_data, scaler):
     """
-    AI-powered stock prediction endpoint.
-    Uses XGBoost & optionally LSTM to predict trade opportunities.
+    AI-powered stock prediction function.
+    Uses XGBoost & LSTM for stock selection.
+    Falls back to XGBoost if LSTM fails.
     """
     try:
-        ticker = request.args.get("ticker")
-        if not ticker:
-            return jsonify({"error": "Ticker is required"}), 400
+        if filtered_data is None or filtered_data.empty:
+            logging.warning("⚠️ No data received for AI prediction!")
+            return jsonify({"error": "No data received for prediction"}), 404
 
-        print(f"📌 AI Prediction Triggered for Ticker: {ticker}")
+        logging.info(f"📌 AI Prediction started for {len(filtered_data)} stocks.")
 
-        # ✅ Fetch and preprocess data
-        df = fetch_historical_data(ticker)
-        if df is None or df.empty:
-            print("⚠️ No data available after fetching!")
-            return jsonify({"error": "No data available for the given ticker"}), 404
+        # ✅ Validate Model Before Using It
+        if isinstance(model, tuple):
+            logging.error(f"❌ Unexpected tuple returned: {type(model)}")
+            model = model[0]
 
-        df, _ = preprocess_data_with_indicators(df)  # ✅ Unpack tuple correctly
-        if df.empty:
-            print("⚠️ No data available after preprocessing!")
-            return jsonify({"error": "No data available for the given ticker"}), 404
+        if not isinstance(model, (tf.keras.Model, tf.keras.Sequential, tf.keras.models.Model)):
+            logging.error(f"❌ The model is not a valid Keras model. Type: {type(model)}")
+            logging.warning("⚠️ No valid LSTM model available. Using XGBoost predictions only.")
+            return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200
 
-        print(f"📌 Dataframe Size After Preprocessing: {len(df)} rows")
+        logging.info(f"🔍 Before prediction: Model type is {type(model)}")
 
-        # ✅ Load XGBoost Model & Features
+        # ✅ Extract Required Features for LSTM
+        lstm_features = list(scaler.feature_names_in_)
+        existing_features = [f for f in lstm_features if f in filtered_data.columns]
+        missing_features = [f for f in lstm_features if f not in filtered_data.columns]
+
+        # ✅ Handle Missing Features
+        if missing_features:
+            logging.warning(f"⚠️ Missing LSTM features: {missing_features}. Filling with 0.")
+            for feature in missing_features:
+                filtered_data[feature] = 0  
+
+        # ✅ Normalize Data for LSTM
+        logging.info(f"🔄 Scaling {len(existing_features)} features for LSTM model...")
+        filtered_data[existing_features] = scaler.transform(filtered_data[existing_features])
+
+        # ✅ Ensure Proper Shape for LSTM Input
+        logging.info(f"📌 LSTM Input Shape Before Prediction: {filtered_data[existing_features].shape}")
+
         try:
-            xgb_model = joblib.load(XGB_MODEL_PATH)
-            trained_features = joblib.load(XGB_FEATURES_PATH)
-            print("✅ XGBoost Model Loaded Successfully!")
-            print(f"📌 Expected Features (Trained): {trained_features}")
+            stock_seq = filtered_data[existing_features].values.reshape(1, 50, len(existing_features))
+            prediction = model.predict(stock_seq)[0, 0]
+            logging.info(f"✅ LSTM Prediction successful: {prediction}")
+
         except Exception as e:
-            print(f"❌ Error loading XGBoost model: {e}")
-            return jsonify({"error": f"❌ Error loading XGBoost model: {e}"}), 500
+            logging.error(f"❌ Error during LSTM prediction: {e}", exc_info=True)
+            logging.warning("⚠️ Using XGBoost predictions due to LSTM failure.")
+            return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200  
 
-        # ✅ Check for missing or extra features
-        missing_features = [f for f in trained_features if f not in df.columns]
-        extra_features = [f for f in df.columns if f not in trained_features]
+        # ✅ Add LSTM Prediction to DataFrame
+        filtered_data["lstm_prediction"] = prediction
 
-        if missing_features or extra_features:
-            print(f"⚠️ Feature mismatch detected!")
-            print(f"🔹 Missing Features: {missing_features}")
-            print(f"🔹 Extra Features: {extra_features}")
+        # ✅ Compute AI Score
+        xgb_weight, lstm_weight = 0.6, 0.4
+        filtered_data["ai_score"] = (
+            (xgb_weight * 1) +  
+            (lstm_weight * (filtered_data["lstm_prediction"] / (filtered_data["close"] + 1e-6)))
+        )
 
-            # ✅ Fill missing features with zeros
-            for f in missing_features:
-                df[f] = 0
+        # ✅ Select Top Candidates
+        top_candidates = filtered_data.sort_values("ai_score", ascending=False).head(20)
 
-        # ✅ Reorder columns to match training
-        df = df[trained_features]
-
-        print(f"✅ Features in prediction data (ordered): {df.columns.tolist()}")
-
-        # ✅ Apply XGBoost Predictions
-        df["xgboost_prediction"] = xgb_model.predict(df)
-        print("✅ XGBoost Predictions Applied!")
-
-        # ✅ Load or Train LSTM Model
-        lstm_model, lstm_scaler = lstm_cache.get("model"), lstm_cache.get("scaler")
-
-        if not lstm_model or not lstm_scaler:
-            print("⚠️ LSTM model not found in cache. Attempting to load saved model...")
-            lstm_model, lstm_scaler = load_lstm_model()
-            if lstm_model and lstm_scaler:
-                print("✅ Loaded saved LSTM model successfully!")
-                lstm_cache["model"], lstm_cache["scaler"] = lstm_model, lstm_scaler
-            else:
-                print("⚠️ LSTM model is missing! Training a new one...")
-                lstm_model, lstm_scaler = train_and_cache_lstm_model()
-                lstm_cache["model"], lstm_cache["scaler"] = lstm_model, lstm_scaler
-
-        # ✅ Apply LSTM Predictions if Available
-        time_steps = 50  # Ensure consistent LSTM time steps
-        if len(df) >= time_steps:
-            print(f"📌 Applying LSTM on last {time_steps} rows...")
-
-            # ✅ Scale Data for LSTM
-            try:
-                df_scaled = pd.DataFrame(lstm_scaler.transform(df), columns=df.columns)
-            except Exception as e:
-                print(f"❌ Error scaling data for LSTM: {e}")
-                return jsonify({"error": f"❌ Error scaling data for LSTM: {e}"}), 500
-
-            # ✅ Ensure correct input shape (1, 50, num_features)
-            if len(df_scaled) < time_steps:
-                padding = np.zeros((time_steps - len(df_scaled), len(trained_features)))
-                df_scaled_padded = np.vstack([padding, df_scaled.values])
-            else:
-                df_scaled_padded = df_scaled.values[-time_steps:]
-
-            X_lstm = df_scaled_padded.reshape(1, time_steps, len(trained_features))
-
-            # ✅ Make LSTM Prediction
-            try:
-                lstm_prediction = lstm_model.predict(X_lstm)[0][0]
-                print(f"📌 LSTM Next-Day Prediction: {lstm_prediction}")
-                df["lstm_prediction"] = lstm_prediction
-            except Exception as e:
-                print(f"❌ Error making LSTM prediction: {e}")
-                return jsonify({"error": f"❌ Error making LSTM prediction: {e}"}), 500
-
-            # ✅ Combine XGBoost & LSTM Predictions
-            xgb_weight, lstm_weight = 0.6, 0.4
-            df["ai_prediction"] = (
-                xgb_weight * df["xgboost_prediction"] +
-                lstm_weight * (df["lstm_prediction"] / df["close"])
-            )
-        else:
-            print("⚠️ Not enough data for LSTM. Using XGBoost only.")
-            df["ai_prediction"] = df["xgboost_prediction"]
-
-        print("✅ AI Predictions Completed!")
-
-        # ✅ Ensure the index is in datetime format
-        if not isinstance(df.index, pd.DatetimeIndex):
-            df.index = pd.to_datetime(df.index, errors='coerce')
-
-        return jsonify({
-            "dates": df.index.strftime('%Y-%m-%d').tolist(),
-            "predictions": df["ai_prediction"].tolist(),
-            "buy_signals": df[df["buy_signal"] == 1]["close"].tolist() if "buy_signal" in df.columns else [],
-            "sell_signals": df[df["sell_signal"] == 1]["close"].tolist() if "sell_signal" in df.columns else []
-        })
+        logging.info(f"📌 AI Predictions Completed. Top {len(top_candidates)} candidates selected.")
+        return jsonify({"candidates": top_candidates.to_dict(orient="records")}), 200
 
     except Exception as e:
-        print(f"❌ Error in ai-predict: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"❌ ERROR in ai_predict: {e}", exc_info=True)
+        logging.warning("⚠️ AI Prediction failed, returning XGBoost stocks.")
+        return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200
+
 
 @app.route("/api/train-lstm", methods=["POST"])
 def train_lstm():
@@ -981,26 +988,9 @@ def train_lstm():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-# ✅ WebSocket & Flask SocketIO
-import websocket
-from flask_socketio import SocketIO
-
-# ✅ Machine Learning & AI
-from joblib import dump, load
-import joblib
-
-# ✅ Sentiment Analysis
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-
-# ✅ Visualization
-import matplotlib.pyplot as plt
-import mplfinance as mpf
-
-# ✅ Caching & Utility
-from cachetools import TTLCache, cached
 
 
-import logging
+
 
 MODELS_DIR = r"C:\Users\gabby\trax-x\backend\models"
 LSTM_MODEL_PATH = os.path.join(MODELS_DIR, "cnn_lstm_attention_model.keras")
@@ -1453,7 +1443,7 @@ import logging
 # ✅ Configure logging format
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-import time
+
 
 @app.route('/api/scan-stocks', methods=['GET'])
 def scan_stocks():
@@ -1504,6 +1494,8 @@ def scan_stocks():
             logging.warning("⚠️ No stocks left after filtering!")
             return jsonify({"error": "No stocks left after filtering!"}), 404
 
+        logging.info(f"📌 Stocks after all filtering steps: {len(filtered_data)}")  # ✅ ADDED LOG
+
         # ✅ Save before XGBoost
         filtered_csv_path = os.path.join(LOG_DIR, "filtered_before_xgboost.csv")
         filtered_data.to_csv(filtered_csv_path, index=False)
@@ -1513,7 +1505,11 @@ def scan_stocks():
         xgb_model = joblib.load(XGB_MODEL_PATH)
 
         # ✅ Ensure correct feature order for prediction
-        xgb_input = filtered_data[trained_features]
+        try:
+            xgb_input = filtered_data[trained_features]
+        except KeyError as e:
+            logging.error(f"❌ ERROR: Missing features in dataset: {e}")
+            return jsonify({"error": "Missing features for XGBoost"}), 500
 
         # ✅ Store tickers before filtering
         tickers_xgb = filtered_data[["ticker"]].copy()
@@ -1524,17 +1520,20 @@ def scan_stocks():
         # ✅ Filter selected stocks
         xgb_filtered_data = filtered_data.loc[xgb_predictions == 1].copy()
 
-        # 🔄 **Retry Logic for Restoring 'T' Column**
+        logging.info(f"📌 Stocks selected after XGBoost: {len(xgb_filtered_data)}")  # ✅ ADDED LOG
+
+        # 🔄 **Ensure 'T' Column is Restored Before AI**
         retries = 3
         for attempt in range(retries):
             try:
                 logging.info(f"🔄 Attempt {attempt+1}: Restoring 'T' column...")
 
-                # ✅ Restore 'T' column by merging original tickers back
+                # ✅ Restore 'T' and 'ticker' column by merging original tickers back
                 xgb_filtered_data = xgb_filtered_data.merge(tickers_xgb, left_index=True, right_index=True, how="left")
+                
+                # ✅ Ensure 'T' and 'ticker' exist before AI prediction
                 xgb_filtered_data.rename(columns={"ticker": "T"}, inplace=True)
 
-                # ✅ Verify 'T' column is restored
                 if 'T' in xgb_filtered_data.columns and xgb_filtered_data['T'].notnull().all():
                     logging.info("✅ 'T' column successfully restored!")
                     break
@@ -1551,7 +1550,12 @@ def scan_stocks():
             logging.error("❌ ERROR: 'T' column is STILL MISSING before returning to frontend!")
             return jsonify({"error": "'T' column missing after XGBoost filtering"}), 500
 
-        # 🔹 **Final Logging Before Sending Response**
+        # ✅ Ensure 'ticker' column is back before AI
+        if 'ticker' not in xgb_filtered_data.columns:
+            logging.warning("⚠️ Restoring 'ticker' column for AI predictions...")
+            xgb_filtered_data["ticker"] = xgb_filtered_data["T"]
+
+        # 🔹 **Final Logging Before AI Prediction**
         logging.info(f"📌 Final stock candidates for frontend (T values): {xgb_filtered_data[['T', 'close']].to_dict(orient='records')}")
 
         # ✅ Save after XGBoost
@@ -1559,14 +1563,26 @@ def scan_stocks():
         xgb_filtered_data.to_csv(xgb_csv_path, index=False)
         logging.info(f"✅ Saved filtered stocks after XGBoost at {xgb_csv_path}")
 
-        return jsonify({"candidates": xgb_filtered_data.to_dict(orient="records")}), 200
+        # ✅ Ensure LSTM Gets Data
+        if xgb_filtered_data.empty:
+            logging.warning("⚠️ No stocks available for LSTM!")
+            return jsonify({"candidates": []}), 200
+
+        logging.info(f"🚀 Calling ai_predict() with {len(xgb_filtered_data)} stocks")
+
+        # ✅ Ensure Saved Model is Used Instead of Retraining
+        try:
+            model = load_lstm_model()  # ✅ Ensure this loads the saved model
+            response = ai_predict(model, xgb_filtered_data, scaler)  # Pass model explicitly
+            logging.info("✅ ai_predict() executed successfully.")
+            return response
+        except Exception as e:
+            logging.error(f"❌ ERROR in ai_predict(): {e}", exc_info=True)
+            return jsonify({"error": "AI prediction failed"}), 500
 
     except Exception as e:
         logging.error(f"❌ ERROR in scan-stocks: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
-
-
-
 # Function to predict the next day using LSTM
 def predict_next_day(model, recent_data, scaler, features):
     """
@@ -1752,7 +1768,7 @@ def ticker_news():
             logging.error(f"❌ Unexpected error fetching news for {ticker}: {str(e)}")
             all_news[ticker] = {"error": f"Unexpected error: {str(e)}"}
 
-    logging.info(f"📌 News response: {all_news}")  # ✅ Log full response
+    #logging.info(f"📌 News response: {all_news}")  # ✅ Log full response
     return jsonify(all_news)  # Return news grouped by ticker
 
 @app.route('/api/sentiment-plot', methods=['GET'])
@@ -1819,87 +1835,106 @@ def check_and_train_model():
 # ✅ Define Paths
 MODELS_DIR = "C:/Users/gabby/trax-x/backend/models"
 LSTM_SCALER_PATH = os.path.join(MODELS_DIR, "cnn_lstm_attention_scaler.pkl")
+import numpy as np
+import pandas as pd
+import logging
+from flask import jsonify
 
-def ai_predict(filtered_data):
+
+def ai_predict(model, filtered_data, scaler):
     """
     AI-powered stock prediction function.
     Uses XGBoost & LSTM for stock selection.
+    Falls back to XGBoost if LSTM fails.
     """
     try:
         if filtered_data is None or filtered_data.empty:
-            print("⚠️ No data received for AI prediction!")
+            logging.warning("⚠️ No data received for AI prediction!")
             return jsonify({"error": "No data received for prediction"}), 404
 
-        print(f"📌 AI Prediction for {len(filtered_data)} stocks.")
+        logging.info(f"📌 AI Prediction started for {len(filtered_data)} stocks.")
 
-        # ✅ Ensure `ticker` column is present
-        if "ticker" not in filtered_data.columns:
-            raise KeyError("❌ 'ticker' column is missing from filtered_data!")
+        # ✅ Validate Model Before Using It
+        if isinstance(model, tuple):
+            logging.error(f"❌ Unexpected tuple returned: {type(model)}")
+            model = model[0]
 
-        # ✅ Load XGBoost Model & Features
-        xgb_model = joblib.load(XGB_MODEL_PATH)
-        trained_features = joblib.load(XGB_FEATURES_PATH)
+        logging.info(f"🔍 Model type before prediction: {type(model)}")
 
-        # ✅ Preserve `ticker` while applying XGBoost
-        filtered_data = filtered_data[["ticker"] + trained_features]
+        if not isinstance(model, (tf.keras.Model, tf.keras.Sequential, tf.keras.models.Model)):
+            logging.error(f"❌ The model is not a valid Keras model. Type: {type(model)}")
+            logging.warning("⚠️ No valid LSTM model available. Using XGBoost predictions only.")
+            return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200
 
-        # ✅ Apply XGBoost Predictions
-        filtered_data["xgboost_prediction"] = xgb_model.predict(filtered_data[trained_features])
-        xgb_filtered_data = filtered_data[filtered_data["xgboost_prediction"] == 1].copy()
+        logging.info("✅ Model is valid. Proceeding with LSTM prediction.")
 
-        if xgb_filtered_data.empty:
-            return jsonify({"candidates": []}), 200
+        # ✅ Extract Required Features for LSTM
+        lstm_features = list(scaler.feature_names_in_)
+        existing_features = [f for f in lstm_features if f in filtered_data.columns]
+        missing_features = [f for f in lstm_features if f not in filtered_data.columns]
 
-        print(f"✅ Stocks After XGBoost Filtering: {len(xgb_filtered_data)}")
+        # ✅ Handle Missing Features
+        if missing_features:
+            logging.warning(f"⚠️ Missing LSTM features: {missing_features}. Filling with 0.")
+            for feature in missing_features:
+                filtered_data[feature] = 0  
 
-        # ✅ Load or Train LSTM Model
-        lstm_model, lstm_scaler = lstm_cache.get("model"), lstm_cache.get("scaler")
-        if not lstm_model or not lstm_scaler:
-            lstm_model, lstm_scaler = train_and_cache_lstm_model()
+        # ✅ Normalize Data for LSTM
+        logging.info(f"🔄 Scaling {len(existing_features)} features for LSTM model...")
+        filtered_data[existing_features] = scaler.transform(filtered_data[existing_features])
 
-        # ✅ Extract Required Features
-        lstm_features = lstm_scaler.feature_names_in_.tolist()
+        # ✅ Ensure Proper Shape for LSTM Input
+        logging.info(f"📌 LSTM Input Shape Before Prediction: {filtered_data[existing_features].shape}")
 
-        # ✅ Ensure features exist & scale data
-        numeric_features = xgb_filtered_data[lstm_features].select_dtypes(include=["number"]).columns.tolist()
-        xgb_filtered_data[numeric_features] = lstm_scaler.transform(xgb_filtered_data[numeric_features])
+        try:
+            # ✅ Ensure exactly 50 time steps for LSTM input
+            time_steps = 50
+            num_features = len(existing_features)
 
-        # ✅ Apply LSTM Predictions per Ticker
-        def apply_lstm_prediction(stock_data):
-            ticker = stock_data["ticker"].iloc[0]
-            stock_seq = stock_data[numeric_features].values
+            if len(filtered_data) < time_steps:
+                logging.warning(f"⚠️ Not enough rows for LSTM (Found: {len(filtered_data)}, Required: {time_steps}). Padding with zeros.")
+                padding = np.zeros((time_steps - len(filtered_data), num_features))
+                stock_seq = np.vstack([padding, filtered_data[existing_features].values])
+            else:
+                stock_seq = filtered_data[existing_features].values[-time_steps:]
 
-            # ✅ Ensure at least 50 rows per stock
-            if len(stock_seq) < 50:
-                padded_seq = np.zeros((50, len(numeric_features)))
-                padded_seq[-len(stock_seq):] = stock_seq
-                stock_seq = padded_seq
+            # ✅ Ensure correct shape for LSTM
+            stock_seq = stock_seq.reshape(1, time_steps, num_features)
+            logging.info(f"✅ Reshaped input for LSTM: {stock_seq.shape}")
 
-            stock_seq = stock_seq.reshape(1, 50, len(numeric_features))
-            prediction = lstm_model.predict(stock_seq)[0, 0]
+            # ✅ Make LSTM Prediction
+            prediction = model.predict(stock_seq)[0, 0]
+            logging.info(f"✅ LSTM Prediction successful: {prediction}")
 
-            return pd.Series({"ticker": ticker, "lstm_prediction": prediction})
+            # ✅ Log Each Stock's Prediction
+            for idx, row in filtered_data.iterrows():
+                logging.info(f"📈 Stock: {row['ticker']} | Close: {row['close']} | LSTM Prediction: {prediction}")
 
-        predictions = xgb_filtered_data.groupby("ticker").apply(apply_lstm_prediction).reset_index(drop=True)
-        xgb_filtered_data = xgb_filtered_data.merge(predictions, on="ticker", how="left")
+        except Exception as e:
+            logging.error(f"❌ Error during LSTM prediction: {e}", exc_info=True)
+            logging.warning("⚠️ Using XGBoost predictions due to LSTM failure.")
+            return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200  
+
+        # ✅ Add LSTM Prediction to DataFrame
+        filtered_data["lstm_prediction"] = prediction
 
         # ✅ Compute AI Score
         xgb_weight, lstm_weight = 0.6, 0.4
-        xgb_filtered_data["ai_score"] = (
-            (xgb_weight * xgb_filtered_data["xgboost_prediction"]) +
-            (lstm_weight * (xgb_filtered_data["lstm_prediction"] / (xgb_filtered_data["close"] + 1e-6)))
+        filtered_data["ai_score"] = (
+            (xgb_weight * 1) +  
+            (lstm_weight * (filtered_data["lstm_prediction"] / (filtered_data["close"] + 1e-6)))
         )
 
         # ✅ Select Top Candidates
-        top_candidates = xgb_filtered_data.sort_values("ai_score", ascending=False).head(20)
+        top_candidates = filtered_data.sort_values("ai_score", ascending=False).head(20)
+
+        logging.info(f"📌 AI Predictions Completed. Top {len(top_candidates)} candidates selected.")
         return jsonify({"candidates": top_candidates.to_dict(orient="records")}), 200
 
-    except KeyError as ke:
-        return jsonify({"error": f"Missing column: {str(ke)}"}), 500
-
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+        logging.error(f"❌ ERROR in ai_predict: {e}", exc_info=True)
+        logging.warning("⚠️ AI Prediction failed, returning XGBoost stocks.")
+        return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200
 
 
 @app.route("/api/train-lstm", methods=["POST"])
