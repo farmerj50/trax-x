@@ -1883,40 +1883,43 @@ def ai_predict(model, filtered_data, scaler):
         logging.info(f"🔄 Scaling {len(existing_features)} features for LSTM model...")
         filtered_data[existing_features] = scaler.transform(filtered_data[existing_features])
 
-        # ✅ Ensure Proper Shape for LSTM Input
-        logging.info(f"📌 LSTM Input Shape Before Prediction: {filtered_data[existing_features].shape}")
+        # ✅ Apply LSTM Predictions Per Stock
+        predictions = []
+        for ticker in filtered_data["ticker"].unique():
+            stock_data = filtered_data[filtered_data["ticker"] == ticker]
+            stock_seq = stock_data[existing_features].values
 
-        try:
-            # ✅ Ensure exactly 50 time steps for LSTM input
+            # 🔍 Log Input Data for Each Stock
+            logging.info(f"📊 Processing {ticker} | Close: {stock_data['close'].values[0]} | Input Shape: {stock_seq.shape}")
+
+            # ✅ Ensure Correct Shape for LSTM Input
             time_steps = 50
             num_features = len(existing_features)
 
-            if len(filtered_data) < time_steps:
-                logging.warning(f"⚠️ Not enough rows for LSTM (Found: {len(filtered_data)}, Required: {time_steps}). Padding with zeros.")
-                padding = np.zeros((time_steps - len(filtered_data), num_features))
-                stock_seq = np.vstack([padding, filtered_data[existing_features].values])
+            if len(stock_seq) < time_steps:
+                logging.warning(f"⚠️ {ticker} has only {len(stock_seq)} rows. Padding to 50.")
+                padding = np.zeros((time_steps - len(stock_seq), num_features))
+                stock_seq = np.vstack([padding, stock_seq])
             else:
-                stock_seq = filtered_data[existing_features].values[-time_steps:]
+                stock_seq = stock_seq[-time_steps:]
 
-            # ✅ Ensure correct shape for LSTM
+            # ✅ Reshape for LSTM Input
             stock_seq = stock_seq.reshape(1, time_steps, num_features)
-            logging.info(f"✅ Reshaped input for LSTM: {stock_seq.shape}")
+            logging.info(f"✅ Reshaped input for {ticker}: {stock_seq.shape}")
 
             # ✅ Make LSTM Prediction
-            prediction = model.predict(stock_seq)[0, 0]
-            logging.info(f"✅ LSTM Prediction successful: {prediction}")
+            try:
+                prediction = model.predict(stock_seq)[0, 0]
+                logging.info(f"✅ LSTM Prediction for {ticker}: {prediction}")
+            except Exception as e:
+                logging.error(f"❌ Error predicting {ticker}: {e}", exc_info=True)
+                prediction = np.nan  
 
-            # ✅ Log Each Stock's Prediction
-            for idx, row in filtered_data.iterrows():
-                logging.info(f"📈 Stock: {row['ticker']} | Close: {row['close']} | LSTM Prediction: {prediction}")
+            predictions.append({"ticker": ticker, "lstm_prediction": prediction})
 
-        except Exception as e:
-            logging.error(f"❌ Error during LSTM prediction: {e}", exc_info=True)
-            logging.warning("⚠️ Using XGBoost predictions due to LSTM failure.")
-            return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200  
-
-        # ✅ Add LSTM Prediction to DataFrame
-        filtered_data["lstm_prediction"] = prediction
+        # ✅ Store Predictions in DataFrame
+        pred_df = pd.DataFrame(predictions)
+        filtered_data = filtered_data.merge(pred_df, on="ticker", how="left")
 
         # ✅ Compute AI Score
         xgb_weight, lstm_weight = 0.6, 0.4
@@ -1935,7 +1938,6 @@ def ai_predict(model, filtered_data, scaler):
         logging.error(f"❌ ERROR in ai_predict: {e}", exc_info=True)
         logging.warning("⚠️ AI Prediction failed, returning XGBoost stocks.")
         return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200
-
 
 @app.route("/api/train-lstm", methods=["POST"])
 def train_lstm():
