@@ -25,12 +25,12 @@ def fetch_ticker_news(ticker, limit=5):
         response.raise_for_status()  # Raise an error for bad responses (4xx, 5xx)
         
         # ✅ Debug: Print raw response
-        print("📌 Raw API Response:", response.text[:200])  # Print first 200 chars
+        #print("📌 Raw API Response:", response.text[:200])  # Print first 200 chars
 
         data = response.json()  # Convert response to JSON
 
         # ✅ Debug: Print parsed JSON
-        print("📌 Parsed JSON:", data)
+       # print("📌 Parsed JSON:", data)
 
         # Ensure response contains the expected "results" key
         if not isinstance(data, dict) or "results" not in data:

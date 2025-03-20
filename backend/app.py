@@ -10,6 +10,9 @@ from datetime import datetime, timedelta
 import time
 from sklearn.preprocessing import LabelEncoder
 import tensorflow as tf
+from utils.indicators import generate_trade_signals
+from utils.fetch_candlestick_data import fetch_candlestick_data
+
 
 
 
@@ -53,6 +56,9 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
+MAX_RETRIES = 10  # Increased retries
+WAIT_TIME = 5  # Increased wait time (seconds)
+
 
 MODELS_DIR = r"C:\Users\gabby\trax-x\backend\models"
 LSTM_MODEL_PATH = os.path.join(MODELS_DIR, "cnn_lstm_attention_model.keras")
@@ -63,6 +69,8 @@ TICKER_ENCODER_PATH = os.path.join(MODELS_DIR, "xgb_ticker_encoder.pkl")
 LOG_DIR = r"C:\Users\gabby\trax-x\backend\log_dir"
 FILTERED_CSV_PATH = os.path.join(LOG_DIR, "filtered_before_xgboost.csv")
 XGB_CSV_PATH = os.path.join(LOG_DIR, "filtered_after_xgboost.csv")
+FINAL_AI_CSV_PATH = os.path.join(LOG_DIR, "final_ai_predictions.csv")
+
 
 
 # ✅ Define Log Directory and Ensure It Exists
@@ -447,31 +455,6 @@ def detect_breakouts(data, window=20, threshold=1.02):
 
     return data
 
-
-def generate_trade_signals(data):
-    """
-    Generate buy/sell signals using a combination of indicators.
-    
-    - Buy when: RSI < 30, MACD crosses up, Volume Surge, Breakout detected
-    - Sell when: RSI > 70, MACD crosses down, ATR shows high volatility
-    
-    Returns:
-    - DataFrame with "buy_signal" & "sell_signal"
-    """
-    data["buy_signal"] = (
-        (data["rsi"] < 30) &  # Oversold
-        (data["macd_line"] > data["macd_signal"]) &  # Bullish MACD crossover
-        (data["volume_surge"] > 1.2) &  # High volume move
-        (data["breakout"] == 1)  # Confirmed breakout
-    ).astype(int)
-
-    data["sell_signal"] = (
-        (data["rsi"] > 70) &  # Overbought
-        (data["macd_line"] < data["macd_signal"]) &  # Bearish MACD crossover
-        (data["atr"] > data["atr"].rolling(14).mean())  # Volatility surge
-    ).astype(int)
-
-    return data
 def plot_candlestick_chart(data, ticker):
     """
     Plot candlestick chart with AI buy/sell signals.
@@ -542,151 +525,6 @@ def alpha_historical_data():
     }
 
     return jsonify(response_data), 200
-
-
-# Function to scan stocks
-import time
-
-import time
-
-@app.route('/api/scan-stocks', methods=['GET'])
-def scan_stocks():
-    try:
-        # ✅ Load LabelEncoder (Ticker Encoding)
-        ticker_encoder = joblib.load(TICKER_ENCODER_PATH)
-
-        # ✅ Extract filtering parameters
-        min_price = float(request.args.get("min_price", 0))
-        max_price = float(request.args.get("max_price", float("inf")))
-        volume_surge = float(request.args.get("volume_surge", 1.2))
-        min_rsi = float(request.args.get("min_rsi", 0))
-        max_rsi = float(request.args.get("max_rsi", 100))
-
-        logging.info(f"📌 Scan Params: min_price={min_price}, max_price={max_price}, volume_surge={volume_surge}, min_rsi={min_rsi}, max_rsi={max_rsi}")
-
-        # ✅ Fetch and preprocess historical data
-        data = fetch_historical_data()
-        if data is None or data.empty:
-            logging.warning("⚠️ No stock data available!")
-            return jsonify({"error": "No stock data available"}), 404
-
-        # ✅ Ensure 'ticker' column exists before encoding
-        if "ticker" not in data.columns:
-            logging.error("❌ ERROR: 'ticker' column is missing!")
-            return jsonify({"error": "'ticker' column missing from data"}), 500
-
-        # ✅ Preserve ticker column before filtering
-        tickers_df = data[["ticker"]].copy()
-
-        # ✅ Apply feature engineering
-        data, _ = preprocess_data_with_indicators(data)
-
-        # ✅ Load XGBoost Features
-        trained_features = joblib.load(XGB_FEATURES_PATH)
-        for feature in trained_features:
-            if feature not in data.columns:
-                data[feature] = 0  # ✅ Fill missing features with 0
-
-        logging.info(f"📌 Features in dataset before filtering: {data.columns.tolist()}")
-
-        # ✅ Apply filtering conditions
-        filtered_data = data[(data["close"] >= min_price) & (data["close"] <= max_price)]
-        filtered_data = filtered_data[filtered_data["volume_surge"] > volume_surge]
-        filtered_data = filtered_data[(filtered_data["rsi"] >= min_rsi) & (filtered_data["rsi"] <= max_rsi)]
-
-        if filtered_data.empty:
-            logging.warning("⚠️ No stocks left after filtering!")
-            return jsonify({"error": "No stocks left after filtering!"}), 404
-
-        logging.info(f"📌 Stocks after all filtering steps: {len(filtered_data)}")
-
-        # ✅ Save before XGBoost
-        filtered_csv_path = os.path.join(LOG_DIR, "filtered_before_xgboost.csv")
-        filtered_data.to_csv(filtered_csv_path, index=False)
-        logging.info(f"✅ Saved filtered stocks before XGBoost at {filtered_csv_path}")
-
-        # ✅ Load XGBoost Model
-        xgb_model = joblib.load(XGB_MODEL_PATH)
-
-        # ✅ Ensure correct feature order for prediction
-        try:
-            xgb_input = filtered_data[trained_features]
-        except KeyError as e:
-            logging.error(f"❌ ERROR: Missing features in dataset: {e}")
-            return jsonify({"error": "Missing features for XGBoost"}), 500
-
-        # ✅ Store tickers before filtering
-        tickers_xgb = filtered_data[["ticker"]].copy()
-
-        # ✅ Predict using XGBoost
-        xgb_predictions = xgb_model.predict(xgb_input)
-
-        # ✅ Filter selected stocks
-        xgb_filtered_data = filtered_data.loc[xgb_predictions == 1].copy()
-
-        logging.info(f"📌 Stocks selected after XGBoost: {len(xgb_filtered_data)}")
-
-        # ✅ Attempt multiple retries to merge 'ticker' column
-        max_retries = 5
-        retry_delay = 2  # Wait 2 seconds before each retry
-
-        for attempt in range(max_retries):
-            try:
-                xgb_filtered_data = xgb_filtered_data.merge(tickers_xgb, left_index=True, right_index=True, how="left")
-                xgb_filtered_data.rename(columns={"ticker": "T"}, inplace=True)
-
-                if "T" in xgb_filtered_data.columns and xgb_filtered_data["T"].notnull().all():
-                    logging.info(f"✅ Successfully appended 'T' column on attempt {attempt + 1}.")
-                    break  # Exit loop if successful
-                else:
-                    logging.warning(f"⚠️ Attempt {attempt + 1}: 'T' column still missing. Retrying in {retry_delay}s...")
-                    time.sleep(retry_delay)
-            except Exception as e:
-                logging.error(f"❌ ERROR merging tickers on attempt {attempt + 1}: {e}", exc_info=True)
-                time.sleep(retry_delay)
-
-        # ✅ Final check for 'T' column before proceeding
-        if "T" not in xgb_filtered_data.columns or xgb_filtered_data["T"].isnull().sum() > 0:
-            logging.error("❌ ERROR: 'T' column is STILL MISSING before returning to frontend!")
-            return jsonify({"error": "'T' column missing after XGBoost filtering"}), 500
-
-        if "ticker" not in xgb_filtered_data.columns:
-            xgb_filtered_data["ticker"] = xgb_filtered_data["T"]
-
-        # ✅ Final Logging Before AI Prediction
-        logging.info(f"📌 Final stock candidates for frontend (T values): {xgb_filtered_data[['T', 'close']].to_dict(orient='records')}")
-
-        # ✅ Save after XGBoost
-        xgb_csv_path = os.path.join(LOG_DIR, "filtered_after_xgboost.csv")
-        xgb_filtered_data.to_csv(xgb_csv_path, index=False)
-        logging.info(f"✅ Saved filtered stocks after XGBoost at {xgb_csv_path}")
-
-        # ✅ Ensure LSTM Gets Data
-        if xgb_filtered_data.empty:
-            logging.warning("⚠️ No stocks available for LSTM!")
-            return jsonify({"candidates": []}), 200
-
-        logging.info(f"🚀 Calling ai_predict() with {len(xgb_filtered_data)} stocks")
-
-        # ✅ Ensure Saved Model is Used Instead of Retraining
-        try:
-            model, scaler = load_lstm_model()  # ✅ Load BOTH model and scaler
-            if model is None or scaler is None:
-                logging.error("❌ ERROR: LSTM model or scaler is missing, falling back to XGBoost-only predictions.")
-                return jsonify({"candidates": xgb_filtered_data.to_dict(orient="records")}), 200
-
-            # ✅ Pass Data to AI Predictor
-            response = ai_predict(model, xgb_filtered_data, scaler)  # Pass BOTH to ai_predict
-            logging.info("✅ ai_predict() executed successfully.")
-            return response
-        except Exception as e:
-            logging.error(f"❌ ERROR in ai_predict(): {e}", exc_info=True)
-            return jsonify({"error": "AI prediction failed"}), 500
-
-    except Exception as e:
-        logging.error(f"❌ ERROR in scan-stocks: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
-
 
 # Function to predict the next day using LSTM
 def predict_next_day(model, recent_data, scaler, features):
@@ -776,14 +614,62 @@ websocket_thread.start()
 
 @app.route('/api/candlestick', methods=['GET'])
 def candlestick_chart():
+    """
+    API endpoint to fetch candlestick data with entry/exit points.
+    Retries if entry/exit points are missing.
+    """
     try:
-        # Get ticker parameter
+        # ✅ Get ticker parameter
         ticker = request.args.get('ticker')
         if not ticker:
+            logging.warning("⚠️ Missing ticker parameter in request")
             return jsonify({"error": "Ticker parameter is missing"}), 400
 
-        print(f"Fetching candlestick data for ticker: {ticker}")
+        logging.info(f"📌 Fetching candlestick data for {ticker}")
 
+        # ✅ Retry logic if entry/exit points are missing
+        MAX_RETRIES = 3  # 🔄 Maximum retry attempts
+        WAIT_TIME = 2  # ⏳ Time to wait between retries (seconds)
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                # ✅ Fetch candlestick data
+                response, status_code = fetch_candlestick_data([ticker])
+
+                if status_code == 200 and response.get(ticker):
+                    entry_price = response[ticker].get("entry_point")
+                    exit_price = response[ticker].get("exit_point")
+
+                    # ✅ Check if entry/exit values exist
+                    if entry_price not in [None, "N/A"] and exit_price not in [None, "N/A"]:
+                        logging.info(f"✅ Entry/Exit points found for {ticker}. Returning data...")
+                        return jsonify(response[ticker]), 200
+
+                logging.warning(f"⚠️ Attempt {attempt}: Entry/Exit points missing for {ticker}. Retrying...")
+
+                # ⏳ Wait before retrying
+                if attempt < MAX_RETRIES:
+                    time.sleep(WAIT_TIME)
+
+            except Exception as e:
+                logging.error(f"❌ Error fetching candlestick data for {ticker}: {e}", exc_info=True)
+
+        logging.error(f"❌ Failed to get valid entry/exit points for {ticker} after {MAX_RETRIES} attempts.")
+
+        # ✅ Fall back to Polygon API if all attempts fail
+        logging.warning(f"⚠️ Falling back to Polygon API for {ticker}")
+        return fetch_polygon_candlestick_data(ticker)
+
+    except Exception as e:
+        logging.error(f"❌ Unexpected error processing ticker {ticker}: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+def fetch_polygon_candlestick_data(ticker):
+    """
+    Fetches candlestick data from Polygon API as a fallback.
+    """
+    try:
         # Define date range (last 180 days)
         end_date = datetime.today()
         start_date = end_date - timedelta(days=180)
@@ -791,8 +677,7 @@ def candlestick_chart():
         # Construct API request URL
         url = (
             f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/"
-            f"{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}?"
-            f"adjusted=true&sort=asc&apiKey={POLYGON_API_KEY}"
+            f"{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}?adjusted=true&sort=asc&apiKey={POLYGON_API_KEY}"
         )
 
         # Fetch data from Polygon API
@@ -800,55 +685,55 @@ def candlestick_chart():
         response.raise_for_status()
         data = response.json()
 
-        # If no data available, return an empty response (previous behavior)
+        # If no data available, return an empty response
         if "results" not in data or not data["results"]:
-            print(f"Warning: No candlestick data found for ticker {ticker}. Returning empty response.")
+            logging.warning(f"⚠️ No candlestick data found for {ticker}. Returning empty response.")
             return jsonify({
-                "dates": [],
-                "open": [],
-                "high": [],
-                "low": [],
-                "close": []
-            }), 200  # Ensures frontend does not break
+                "dates": [], "open": [], "high": [], "low": [], "close": [],
+                "entry_point": None, "exit_point": None
+            }), 200
 
         # Convert results to DataFrame
         results = pd.DataFrame(data["results"])
 
-        # Ensure required columns exist; if missing, default to empty lists
-        return jsonify({
-            "dates": results["t"].apply(lambda x: datetime.utcfromtimestamp(x / 1000).strftime('%Y-%m-%d')).tolist() if "t" in results else [],
-            "open": results["o"].tolist() if "o" in results else [],
-            "high": results["h"].tolist() if "h" in results else [],
-            "low": results["l"].tolist() if "l" in results else [],
-            "close": results["c"].tolist() if "c" in results else [],
-        }), 200
+        # Convert timestamps to date strings
+        results["date"] = results["t"].apply(lambda x: datetime.utcfromtimestamp(x / 1000).strftime('%Y-%m-%d'))
 
-    except requests.exceptions.Timeout:
-        print(f"Timeout while fetching data for {ticker}")
-        return jsonify({"error": "External API request timed out"}), 504
+        # Ensure required columns exist
+        required_columns = ["o", "h", "l", "c"]
+        for col in required_columns:
+            if col not in results:
+                results[col] = None  # Handle missing values safely
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching data for {ticker}: {e}")
-        return jsonify({"error": "External API error"}), 500
+        # ✅ Generate Buy/Sell Signals
+        results = generate_trade_signals(results)
+
+        # ✅ Identify first buy and sell signals
+        entry_idx = results[results["buy_signal"] == 1].index.min()
+        exit_idx = results[results["sell_signal"] == 1].index.min()
+
+        # ✅ Assign Entry & Exit Price (or None if missing)
+        entry_price = results.loc[entry_idx, "c"] if pd.notna(entry_idx) else None
+        exit_price = results.loc[exit_idx, "c"] if pd.notna(exit_idx) else None
+
+        # ✅ API Response
+        response_data = {
+            "dates": results["date"].tolist(),
+            "open": results["o"].tolist(),
+            "high": results["h"].tolist(),
+            "low": results["l"].tolist(),
+            "close": results["c"].tolist(),
+            "entry_point": entry_price,
+            "exit_point": exit_price
+        }
+
+        logging.info(f"✅ Polygon API Response for {ticker}: {json.dumps(response_data, indent=2)}")
+        return jsonify(response_data), 200
 
     except Exception as e:
-        print(f"Unexpected error processing ticker {ticker}: {e}")
-        return jsonify({"error": "Internal server error"}), 500
-
-        
-    except requests.exceptions.Timeout:
-        print(f"Timeout occurred while fetching data for ticker: {ticker}")
-        return jsonify({"error": "Request to external API timed out"}), 504
-
-    except requests.exceptions.RequestException as e:
-        print(f"Request error for ticker {ticker}: {e}")
-        return jsonify({"error": "Error fetching data from external API"}), 500
-
-    except Exception as e:
-        print(f"Unexpected error for ticker {ticker}: {e}")
-        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
-
-
+        logging.error(f"❌ Error fetching Polygon data for {ticker}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to fetch fallback stock data"}), 500
+    
 @app.route('/api/sentiment-plot', methods=['GET'])
 def sentiment_plot():
     """
@@ -902,16 +787,18 @@ def ai_predict(model, filtered_data, scaler):
     """
     AI-powered stock prediction function.
     Uses XGBoost & LSTM for stock selection.
-    Falls back to XGBoost if LSTM fails.
     """
     try:
+        logging.debug("🔍 Entering ai_predict function.")
+
         if filtered_data is None or filtered_data.empty:
             logging.warning("⚠️ No data received for AI prediction!")
-            return jsonify({"error": "No data received for prediction"}), 404
+            return {"error": "No data received for prediction"}, 404
 
         logging.info(f"📌 AI Prediction started for {len(filtered_data)} stocks.")
+        logging.debug(f"📝 First 5 rows of filtered_data:\n{filtered_data.head()}")
 
-        # ✅ Validate Model Before Using It
+        # ✅ Ensure Model is Valid
         if isinstance(model, tuple):
             logging.error(f"❌ Unexpected tuple returned: {type(model)}")
             model = model[0]
@@ -919,14 +806,18 @@ def ai_predict(model, filtered_data, scaler):
         if not isinstance(model, (tf.keras.Model, tf.keras.Sequential, tf.keras.models.Model)):
             logging.error(f"❌ The model is not a valid Keras model. Type: {type(model)}")
             logging.warning("⚠️ No valid LSTM model available. Using XGBoost predictions only.")
-            return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200
+            return {"candidates": filtered_data.to_dict(orient="records")}, 200
 
-        logging.info(f"🔍 Before prediction: Model type is {type(model)}")
+        logging.debug(f"✅ Model type before prediction: {type(model)}")
 
         # ✅ Extract Required Features for LSTM
         lstm_features = list(scaler.feature_names_in_)
         existing_features = [f for f in lstm_features if f in filtered_data.columns]
         missing_features = [f for f in lstm_features if f not in filtered_data.columns]
+
+        logging.debug(f"📝 LSTM features extracted: {lstm_features}")
+        logging.debug(f"✅ Existing features in dataset: {existing_features}")
+        logging.debug(f"⚠️ Missing features: {missing_features}")
 
         # ✅ Handle Missing Features
         if missing_features:
@@ -935,24 +826,25 @@ def ai_predict(model, filtered_data, scaler):
                 filtered_data[feature] = 0  
 
         # ✅ Normalize Data for LSTM
-        logging.info(f"🔄 Scaling {len(existing_features)} features for LSTM model...")
+        logging.debug("🔄 Scaling features for LSTM model...")
         filtered_data[existing_features] = scaler.transform(filtered_data[existing_features])
+        logging.debug(f"📝 First 5 rows after scaling:\n{filtered_data[existing_features].head()}")
 
         # ✅ Ensure Proper Shape for LSTM Input
-        logging.info(f"📌 LSTM Input Shape Before Prediction: {filtered_data[existing_features].shape}")
+        stock_seq = filtered_data[existing_features].values.reshape(1, 50, len(existing_features))
+        logging.debug(f"📌 LSTM Input Shape: {stock_seq.shape}")
 
         try:
-            stock_seq = filtered_data[existing_features].values.reshape(1, 50, len(existing_features))
             prediction = model.predict(stock_seq)[0, 0]
             logging.info(f"✅ LSTM Prediction successful: {prediction}")
-
         except Exception as e:
             logging.error(f"❌ Error during LSTM prediction: {e}", exc_info=True)
             logging.warning("⚠️ Using XGBoost predictions due to LSTM failure.")
-            return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200  
+            return {"candidates": filtered_data.to_dict(orient="records")}, 200  
 
         # ✅ Add LSTM Prediction to DataFrame
         filtered_data["lstm_prediction"] = prediction
+        logging.debug(f"📝 LSTM Predictions added to DataFrame:\n{filtered_data[['ticker', 'lstm_prediction']].head()}")
 
         # ✅ Compute AI Score
         xgb_weight, lstm_weight = 0.6, 0.4
@@ -961,17 +853,28 @@ def ai_predict(model, filtered_data, scaler):
             (lstm_weight * (filtered_data["lstm_prediction"] / (filtered_data["close"] + 1e-6)))
         )
 
+        logging.debug(f"📌 AI Score calculated. First 5 rows:\n{filtered_data[['ticker', 'ai_score']].head()}")
+
         # ✅ Select Top Candidates
         top_candidates = filtered_data.sort_values("ai_score", ascending=False).head(20)
-
         logging.info(f"📌 AI Predictions Completed. Top {len(top_candidates)} candidates selected.")
-        return jsonify({"candidates": top_candidates.to_dict(orient="records")}), 200
+        logging.debug(f"📝 Top 5 candidates:\n{top_candidates.head()}")
+
+        # ✅ Save the Final Selected Stocks for Charting
+        os.makedirs(os.path.dirname(FINAL_AI_CSV_PATH), exist_ok=True)  # Ensure directory exists
+        top_candidates.to_csv(FINAL_AI_CSV_PATH, index=False)
+
+        if os.path.exists(FINAL_AI_CSV_PATH):
+            logging.info(f"✅ File successfully saved: {FINAL_AI_CSV_PATH}")
+        else:
+            logging.error("❌ File save failed! The file does not exist after saving.")
+
+        return {"candidates": top_candidates.to_dict(orient="records")}, 200
 
     except Exception as e:
         logging.error(f"❌ ERROR in ai_predict: {e}", exc_info=True)
         logging.warning("⚠️ AI Prediction failed, returning XGBoost stocks.")
-        return jsonify({"candidates": filtered_data.to_dict(orient="records")}), 200
-
+        return {"candidates": filtered_data.to_dict(orient="records")}, 200
 
 @app.route("/api/train-lstm", methods=["POST"])
 def train_lstm():
@@ -1302,31 +1205,6 @@ def detect_breakouts(data, window=20, threshold=1.02):
 
     return data
 
-
-def generate_trade_signals(data):
-    """
-    Generate buy/sell signals using a combination of indicators.
-    
-    - Buy when: RSI < 30, MACD crosses up, Volume Surge, Breakout detected
-    - Sell when: RSI > 70, MACD crosses down, ATR shows high volatility
-    
-    Returns:
-    - DataFrame with "buy_signal" & "sell_signal"
-    """
-    data["buy_signal"] = (
-        (data["rsi"] < 30) &  # Oversold
-        (data["macd_line"] > data["macd_signal"]) &  # Bullish MACD crossover
-        (data["volume_surge"] > 1.2) &  # High volume move
-        (data["breakout"] == 1)  # Confirmed breakout
-    ).astype(int)
-
-    data["sell_signal"] = (
-        (data["rsi"] > 70) &  # Overbought
-        (data["macd_line"] < data["macd_signal"]) &  # Bearish MACD crossover
-        (data["atr"] > data["atr"].rolling(14).mean())  # Volatility surge
-    ).astype(int)
-
-    return data
 def plot_candlestick_chart(data, ticker):
     """
     Plot candlestick chart with AI buy/sell signals.
@@ -1434,20 +1312,11 @@ def predict_next_day(model, recent_data, scaler, features):
         return 0  # Default to 0 in case of failure
 
 
-
-# Function to scan stocks
-from utils.train_xgboost import train_xgboost_with_optuna  # ✅ Import Optuna-trained model
-
-import logging
-
-# ✅ Configure logging format
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-
-
 @app.route('/api/scan-stocks', methods=['GET'])
 def scan_stocks():
     try:
+        logging.info("📌 Starting scan-stocks process...")
+
         # ✅ Load LabelEncoder (Ticker Encoding)
         ticker_encoder = joblib.load(TICKER_ENCODER_PATH)
 
@@ -1486,20 +1355,24 @@ def scan_stocks():
         logging.info(f"📌 Features in dataset before filtering: {data.columns.tolist()}")
 
         # ✅ Apply filtering conditions
-        filtered_data = data[(data["close"] >= min_price) & (data["close"] <= max_price)]
-        filtered_data = filtered_data[filtered_data["volume_surge"] > volume_surge]
-        filtered_data = filtered_data[(filtered_data["rsi"] >= min_rsi) & (filtered_data["rsi"] <= max_rsi)]
+        filtered_data = data[
+            (data["close"] >= min_price) & 
+            (data["close"] <= max_price) &
+            (data["volume_surge"] > volume_surge) &
+            (data["rsi"] >= min_rsi) & 
+            (data["rsi"] <= max_rsi)
+        ]
 
         if filtered_data.empty:
             logging.warning("⚠️ No stocks left after filtering!")
             return jsonify({"error": "No stocks left after filtering!"}), 404
 
-        logging.info(f"📌 Stocks after all filtering steps: {len(filtered_data)}")  # ✅ ADDED LOG
+        logging.info(f"📌 Stocks after all filtering steps: {len(filtered_data)}")
 
-        # ✅ Save before XGBoost
+        # ✅ Save before AI Predictions
         filtered_csv_path = os.path.join(LOG_DIR, "filtered_before_xgboost.csv")
         filtered_data.to_csv(filtered_csv_path, index=False)
-        logging.info(f"✅ Saved filtered stocks before XGBoost at {filtered_csv_path}")
+        logging.info(f"✅ Saved filtered stocks before AI predictions at {filtered_csv_path}")
 
         # ✅ Load XGBoost Model
         xgb_model = joblib.load(XGB_MODEL_PATH)
@@ -1511,52 +1384,15 @@ def scan_stocks():
             logging.error(f"❌ ERROR: Missing features in dataset: {e}")
             return jsonify({"error": "Missing features for XGBoost"}), 500
 
-        # ✅ Store tickers before filtering
-        tickers_xgb = filtered_data[["ticker"]].copy()
-
         # ✅ Predict using XGBoost
         xgb_predictions = xgb_model.predict(xgb_input)
 
         # ✅ Filter selected stocks
         xgb_filtered_data = filtered_data.loc[xgb_predictions == 1].copy()
+        logging.info(f"📌 Stocks selected after XGBoost: {len(xgb_filtered_data)}")
 
-        logging.info(f"📌 Stocks selected after XGBoost: {len(xgb_filtered_data)}")  # ✅ ADDED LOG
-
-        # 🔄 **Ensure 'T' Column is Restored Before AI**
-        retries = 3
-        for attempt in range(retries):
-            try:
-                logging.info(f"🔄 Attempt {attempt+1}: Restoring 'T' column...")
-
-                # ✅ Restore 'T' and 'ticker' column by merging original tickers back
-                xgb_filtered_data = xgb_filtered_data.merge(tickers_xgb, left_index=True, right_index=True, how="left")
-                
-                # ✅ Ensure 'T' and 'ticker' exist before AI prediction
-                xgb_filtered_data.rename(columns={"ticker": "T"}, inplace=True)
-
-                if 'T' in xgb_filtered_data.columns and xgb_filtered_data['T'].notnull().all():
-                    logging.info("✅ 'T' column successfully restored!")
-                    break
-
-                logging.warning(f"⚠️ Attempt {attempt+1}: 'T' column still contains NaN values. Retrying...")
-                time.sleep(2)
-
-            except Exception as e:
-                logging.error(f"❌ Attempt {attempt+1}: Error restoring 'T' column: {e}")
-                time.sleep(2)
-
-        # ✅ Final validation for 'T' column
-        if 'T' not in xgb_filtered_data.columns or xgb_filtered_data['T'].isnull().sum() > 0:
-            logging.error("❌ ERROR: 'T' column is STILL MISSING before returning to frontend!")
-            return jsonify({"error": "'T' column missing after XGBoost filtering"}), 500
-
-        # ✅ Ensure 'ticker' column is back before AI
-        if 'ticker' not in xgb_filtered_data.columns:
-            logging.warning("⚠️ Restoring 'ticker' column for AI predictions...")
-            xgb_filtered_data["ticker"] = xgb_filtered_data["T"]
-
-        # 🔹 **Final Logging Before AI Prediction**
-        logging.info(f"📌 Final stock candidates for frontend (T values): {xgb_filtered_data[['T', 'close']].to_dict(orient='records')}")
+        # ✅ Restore 'T' column before AI
+        xgb_filtered_data["T"] = xgb_filtered_data["ticker"]
 
         # ✅ Save after XGBoost
         xgb_csv_path = os.path.join(LOG_DIR, "filtered_after_xgboost.csv")
@@ -1570,15 +1406,51 @@ def scan_stocks():
 
         logging.info(f"🚀 Calling ai_predict() with {len(xgb_filtered_data)} stocks")
 
-        # ✅ Ensure Saved Model is Used Instead of Retraining
-        try:
-            model = load_lstm_model()  # ✅ Ensure this loads the saved model
-            response = ai_predict(model, xgb_filtered_data, scaler)  # Pass model explicitly
-            logging.info("✅ ai_predict() executed successfully.")
-            return response
-        except Exception as e:
-            logging.error(f"❌ ERROR in ai_predict(): {e}", exc_info=True)
-            return jsonify({"error": "AI prediction failed"}), 500
+        # ✅ Load LSTM Model
+        model = load_lstm_model()
+
+        # ✅ Load Scaler
+        scaler = joblib.load(SCALER_PATH)
+
+        # ✅ Call ai_predict with all required arguments
+        processed_data, _ = preprocess_data_with_indicators(xgb_filtered_data)
+        ai_predict(model, xgb_filtered_data, scaler)
+
+        # ✅ **NEW: Wait for AI Predictions CSV to be Fully Processed**
+        max_retries = 8  # Maximum retry attempts
+        wait_time = 5  # Wait time (seconds) before each retry
+
+        for attempt in range(max_retries):
+            if os.path.exists(FINAL_AI_CSV_PATH):
+                try:
+                    final_ai_data = pd.read_csv(FINAL_AI_CSV_PATH)
+
+                    # ✅ Ensure entry/exit points exist
+                    if "entry_point" in final_ai_data and "exit_point" in final_ai_data:
+                        if not final_ai_data["entry_point"].isnull().all() and not final_ai_data["exit_point"].isnull().all():
+                            logging.info("✅ AI Predictions CSV is ready with entry/exit points.")
+                            break  # ✅ Exit loop when valid data is found
+
+                except Exception as file_read_error:
+                    logging.warning(f"⚠️ Error reading AI Predictions CSV: {file_read_error}")
+
+            logging.warning(f"⚠️ Attempt {attempt+1}: Waiting for AI Predictions CSV to be updated...")
+            time.sleep(wait_time)  # ⏳ Wait before checking again
+
+        else:
+            # If the loop exits without a `break`, handle the failure
+            logging.error("❌ ERROR: AI Predictions CSV was not ready in time.")
+            return jsonify({"error": "Entry/Exit points missing from final AI CSV"}), 500
+
+        # ✅ Convert entry/exit points to float
+        final_ai_data["entry_point"] = final_ai_data["entry_point"].astype(float).round(4)
+        final_ai_data["exit_point"] = final_ai_data["exit_point"].astype(float).round(4)
+
+        # ✅ **Return Final Data with Stock News**
+        final_ai_data["news"] = final_ai_data["T"].apply(fetch_ticker_news)  # 🔥 Restored Stock News Fetching
+        logging.info(f"📌 Returning {len(final_ai_data)} final stock candidates to frontend.")
+        
+        return jsonify({"candidates": final_ai_data.to_dict(orient="records")}), 200
 
     except Exception as e:
         logging.error(f"❌ ERROR in scan-stocks: {e}", exc_info=True)
@@ -1672,12 +1544,12 @@ websocket_thread.start()
 @app.route('/api/candlestick', methods=['GET'])
 def candlestick_chart():
     try:
-        # Get ticker parameter
-        ticker = request.args.get('ticker')
+        # ✅ Expect a single ticker, just like before
+        ticker = request.args.get('ticker')  
         if not ticker:
             return jsonify({"error": "Ticker parameter is missing"}), 400
 
-        print(f"Fetching candlestick data for ticker: {ticker}")
+        print(f"📌 Fetching candlestick data for ticker: {ticker}")
 
         # Define date range (last 180 days)
         end_date = datetime.today()
@@ -1697,13 +1569,9 @@ def candlestick_chart():
 
         # If no data available, return an empty response (previous behavior)
         if "results" not in data or not data["results"]:
-            print(f"Warning: No candlestick data found for ticker {ticker}. Returning empty response.")
+            print(f"⚠️ Warning: No candlestick data found for ticker {ticker}. Returning empty response.")
             return jsonify({
-                "dates": [],
-                "open": [],
-                "high": [],
-                "low": [],
-                "close": []
+                "dates": [], "open": [], "high": [], "low": [], "close": []
             }), 200  # Ensures frontend does not break
 
         # Convert results to DataFrame
@@ -1719,29 +1587,16 @@ def candlestick_chart():
         }), 200
 
     except requests.exceptions.Timeout:
-        print(f"Timeout while fetching data for {ticker}")
+        print(f"❌ Timeout while fetching data for {ticker}")
         return jsonify({"error": "External API request timed out"}), 504
 
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching data for {ticker}: {e}")
+        print(f"❌ Error fetching data for {ticker}: {e}")
         return jsonify({"error": "External API error"}), 500
 
     except Exception as e:
-        print(f"Unexpected error processing ticker {ticker}: {e}")
+        print(f"❌ Unexpected error processing ticker {ticker}: {e}")
         return jsonify({"error": "Internal server error"}), 500
-
-        
-    except requests.exceptions.Timeout:
-        print(f"Timeout occurred while fetching data for ticker: {ticker}")
-        return jsonify({"error": "Request to external API timed out"}), 504
-
-    except requests.exceptions.RequestException as e:
-        print(f"Request error for ticker {ticker}: {e}")
-        return jsonify({"error": "Error fetching data from external API"}), 500
-
-    except Exception as e:
-        print(f"Unexpected error for ticker {ticker}: {e}")
-        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
 
 @app.route("/api/ticker-news", methods=["GET"])
 def ticker_news():
@@ -1835,11 +1690,6 @@ def check_and_train_model():
 # ✅ Define Paths
 MODELS_DIR = "C:/Users/gabby/trax-x/backend/models"
 LSTM_SCALER_PATH = os.path.join(MODELS_DIR, "cnn_lstm_attention_scaler.pkl")
-import numpy as np
-import pandas as pd
-import logging
-from flask import jsonify
-
 
 def ai_predict(model, filtered_data, scaler):
     """
@@ -1932,6 +1782,51 @@ def ai_predict(model, filtered_data, scaler):
         top_candidates = filtered_data.sort_values("ai_score", ascending=False).head(20)
 
         logging.info(f"📌 AI Predictions Completed. Top {len(top_candidates)} candidates selected.")
+
+        # ✅ Save the Final Selected Stocks for Charting
+        FINAL_AI_CSV_PATH = os.path.join("C:/Users/gabby/trax-x/backend/log_dir", "final_ai_predictions.csv")
+
+        try:
+            os.makedirs(os.path.dirname(FINAL_AI_CSV_PATH), exist_ok=True)
+            top_candidates.to_csv(FINAL_AI_CSV_PATH, index=False)
+            
+            # ✅ Confirm File Creation
+            if os.path.exists(FINAL_AI_CSV_PATH):
+                logging.info(f"✅ File successfully saved: {FINAL_AI_CSV_PATH}")
+            else:
+                logging.error(f"❌ File save operation completed, but file not found at {FINAL_AI_CSV_PATH}")
+
+        except Exception as e:
+            logging.error(f"❌ Error while saving AI predictions CSV: {e}", exc_info=True)
+
+        # ✅ Fetch Candlestick Data with Exception Handling
+        try:
+            tickers_list = top_candidates["T"].tolist()
+            logging.info(f"📌 Fetching candlestick data for AI-selected tickers: {tickers_list}")
+            candlestick_response, status_code = fetch_candlestick_data(tickers_list)
+
+            if status_code == 200 and isinstance(candlestick_response, dict):
+                logging.info("✅ Successfully fetched candlestick data.")
+
+                # ✅ Inject AI-based Entry/Exit Points
+                for ticker in tickers_list:
+                    if ticker in candlestick_response:
+                        candlestick_response[ticker]["entry_point"] = (
+                            top_candidates[top_candidates["T"] == ticker]["close"] * 0.95
+                        ).values[0]
+                        candlestick_response[ticker]["exit_point"] = (
+                            top_candidates[top_candidates["T"] == ticker]["close"] * 1.1
+                        ).values[0]
+
+                logging.info(f"✅ Returning AI predictions with candlestick data.")
+                return jsonify({"candidates": top_candidates.to_dict(orient="records"),
+                                "candlestick_data": candlestick_response}), 200
+
+            logging.warning(f"⚠️ Candlestick data fetch returned status: {status_code}")
+
+        except Exception as e:
+            logging.error(f"❌ ERROR while fetching candlestick data: {e}", exc_info=True)
+
         return jsonify({"candidates": top_candidates.to_dict(orient="records")}), 200
 
     except Exception as e:
