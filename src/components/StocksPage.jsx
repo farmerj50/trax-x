@@ -28,6 +28,7 @@ import {
   MacdIndicator,
   StochasticIndicator,
   RsiIndicator,
+  ScatterSeries
 } from "@syncfusion/ej2-react-charts";
 
 const POLYGON_WS_URL = "wss://delayed.polygon.io/stocks"; // 15-min delayed data
@@ -41,6 +42,8 @@ const StocksPage = () => {
   const [loading, setLoading] = useState(false);
   const [livePrice, setLivePrice] = useState(null);
   const [ws, setWs] = useState(null);
+  const [entryPoint, setEntryPoint] = useState(null);
+  const [exitPoint, setExitPoint] = useState(null);
 
   const periods = [
     { intervalType: "Months", interval: 1, text: "1M" },
@@ -50,16 +53,21 @@ const StocksPage = () => {
     { intervalType: "Years", interval: 3, text: "All" },
   ];
 
-  /** Fetch Historical Chart Data */
-  const fetchChartData = async (tickerSymbol) => {
+  /** 🔄 Fetch Historical Chart Data */
+  const fetchStockData = async (tickerSymbol) => {
     setLoading(true);
+    console.log(`📡 Fetching stock data for: ${tickerSymbol}`);
+
     try {
       const response = await fetch(
-        `http://localhost:5000/api/candlestick?ticker=${tickerSymbol}`
+        `http://localhost:5000/api/stock-data?ticker=${tickerSymbol}`
       );
-      if (!response.ok) throw new Error("Failed to fetch chart data.");
+
+      if (!response.ok) throw new Error("Failed to fetch stock data.");
 
       const data = await response.json();
+      console.log("✅ API Response:", data);
+
       if (data && data.dates && data.dates.length > 0) {
         const formattedData = data.dates.map((date, index) => ({
           x: new Date(date),
@@ -70,21 +78,23 @@ const StocksPage = () => {
         }));
 
         setChartData(formattedData);
+        setEntryPoint(data.entry_point ? data.entry_point : null);
+        setExitPoint(data.exit_point ? data.exit_point : null);
         setError("");
       } else {
         setChartData([]);
         setError("No data available for the selected ticker.");
       }
     } catch (err) {
-      console.error("Error fetching chart data:", err);
+      console.error("❌ Error fetching stock data:", err);
       setChartData([]);
-      setError(err.message || "Failed to load chart data.");
+      setError(err.message || "Failed to load stock data.");
     } finally {
       setLoading(false);
     }
   };
 
-  /** Handle Live WebSocket Updates */
+  /** 🔄 Handle Live WebSocket Updates */
   const handleWebSocketMessage = (event) => {
     const data = JSON.parse(event.data);
 
@@ -107,7 +117,7 @@ const StocksPage = () => {
     });
   };
 
-  /** Setup WebSocket Connection */
+  /** 🔄 Setup WebSocket Connection */
   const setupWebSocket = () => {
     if (ws) {
       ws.close(); // Close existing connection
@@ -127,18 +137,21 @@ const StocksPage = () => {
     setWs(websocket);
   };
 
-  /** Effect: Fetch Chart Data on Ticker Change */
+  /** 🔄 Effect: Fetch Chart Data on Ticker Change */
   useEffect(() => {
-    fetchChartData(selectedTicker);
+    fetchStockData(selectedTicker);
     setupWebSocket();
     return () => {
       if (ws) ws.close();
     };
   }, [selectedTicker]);
 
+  /** 🔎 Handle Search */
   const handleSearch = () => {
     if (ticker.trim() !== "") {
-      setSelectedTicker(ticker.toUpperCase());
+      const newTicker = ticker.toUpperCase();
+      setSelectedTicker(newTicker);
+      fetchStockData(newTicker); // ✅ Fetch new data on search
     }
   };
 
@@ -173,11 +186,49 @@ const StocksPage = () => {
         tooltip={{ enable: true }}
         crosshair={{ enable: true }}
         periods={periods}
+        key={selectedTicker} // ✅ Forces re-render when ticker changes
       >
-        <Inject services={[DateTime, Tooltip, RangeTooltip, Crosshair, LineSeries, CandleSeries, Legend, Export, EmaIndicator, TmaIndicator, SmaIndicator, MomentumIndicator, AtrIndicator, AccumulationDistributionIndicator, BollingerBands, MacdIndicator, StochasticIndicator, RsiIndicator]} />
+        <Inject services={[
+          DateTime, Tooltip, RangeTooltip, Crosshair, LineSeries, CandleSeries,
+          Legend, Export, RsiIndicator, MacdIndicator, ScatterSeries
+        ]} />
         <StockChartSeriesCollectionDirective>
-          <StockChartSeriesDirective dataSource={chartData} xName="x" open="open" high="high" low="low" close="close" type="Candle" animation={{ enable: true }} />
+          <StockChartSeriesDirective 
+            dataSource={chartData} 
+            xName="x" 
+            open="open" 
+            high="high" 
+            low="low" 
+            close="close" 
+            type="Candle" 
+            animation={{ enable: true }} 
+          />
         </StockChartSeriesCollectionDirective>
+
+        {/* ✅ Highlight Entry Point */}
+        {entryPoint !== null && (
+          <StockChartSeriesDirective
+            dataSource={[{ x: chartData[0]?.x, y: entryPoint }]}
+            xName="x"
+            yName="y"
+            type="Scatter"
+            marker={{ visible: true, shape: "Triangle", fill: "green", size: 10 }}
+            name="Entry Point"
+          />
+        )}
+
+        {/* ✅ Highlight Exit Point */}
+        {exitPoint !== null && (
+          <StockChartSeriesDirective
+            dataSource={[{ x: chartData[chartData.length - 1]?.x, y: exitPoint }]}
+            xName="x"
+            yName="y"
+            type="Scatter"
+            marker={{ visible: true, shape: "InvertedTriangle", fill: "red", size: 10 }}
+            name="Exit Point"
+          />
+        )}
+
       </StockChartComponent>
     </div>
   );

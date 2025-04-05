@@ -51,6 +51,9 @@ from utils.model_loader import load_xgb_model
 from utils.train_xgboost import load_training_data
 from utils.train_model import train_xgboost_with_optuna
 from utils.train_xgboost import tune_xgboost_hyperparameters
+from utils.indicators import preprocess_number_one_strategy
+from utils.indicators import compute_macd
+
 
 import logging
 
@@ -454,36 +457,6 @@ def detect_breakouts(data, window=20, threshold=1.02):
     )
 
     return data
-
-def plot_candlestick_chart(data, ticker):
-    """
-    Plot candlestick chart with AI buy/sell signals.
-    """
-    buy_signals = data[data["buy_signal"] == 1]
-    sell_signals = data[data["sell_signal"] == 1]
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-
-    # ✅ Candlestick Chart
-    mpf.plot(data, type="candle", ax=ax, volume=True)
-
-    # ✅ Highlight Buy Signals
-    ax.scatter(buy_signals.index, buy_signals["c"], color="green", label="BUY", marker="^", alpha=1, s=100)
-
-    # ✅ Highlight Sell Signals
-    ax.scatter(sell_signals.index, sell_signals["c"], color="red", label="SELL", marker="v", alpha=1, s=100)
-
-    # ✅ Display Trendlines
-    ax.set_title(f"{ticker} - AI Trading Signals")
-    ax.legend()
-    plt.show()
-
-
-# Function to preprocess data with enhanced indicators
-# After fetch_historical_data
-
-# Load XGBoost model if it exists, otherwise train it
-# Load LSTM model if it exists, otherwise train it
 
 @app.route('/api/alpha-historical-data', methods=['GET'])
 def alpha_historical_data():
@@ -1209,31 +1182,45 @@ def plot_candlestick_chart(data, ticker):
     """
     Plot candlestick chart with AI buy/sell signals.
     """
-    buy_signals = data[data["buy_signal"] == 1]
-    sell_signals = data[data["sell_signal"] == 1]
+    try:
+        logging.debug(f"📌 DEBUG: Plot function called for {ticker}")
+        logging.debug(f"✅ First few rows of data:\n{data.head()}")
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+        buy_signals = data[data["buy_signal"] == 1]
+        sell_signals = data[data["sell_signal"] == 1]
 
-    # ✅ Candlestick Chart
-    mpf.plot(data, type="candle", ax=ax, volume=True)
+        # ✅ Explicitly create fig & ax
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # ✅ Use returnfig=True to get the figure from mpf.plot
+        fig, axlist = mpf.plot(
+            data,
+            type="candle",
+            volume=True,
+            returnfig=True
+        )
 
-    # ✅ Highlight Buy Signals
-    ax.scatter(buy_signals.index, buy_signals["c"], color="green", label="BUY", marker="^", alpha=1, s=100)
+        # ✅ Scatter Buy Signals
+        axlist[0].scatter(
+            buy_signals.index, buy_signals["c"],
+            color="green", label="BUY", marker="^", alpha=1, s=100
+        )
 
-    # ✅ Highlight Sell Signals
-    ax.scatter(sell_signals.index, sell_signals["c"], color="red", label="SELL", marker="v", alpha=1, s=100)
+        # ✅ Scatter Sell Signals
+        axlist[0].scatter(
+            sell_signals.index, sell_signals["c"],
+            color="red", label="SELL", marker="v", alpha=1, s=100
+        )
 
-    # ✅ Display Trendlines
-    ax.set_title(f"{ticker} - AI Trading Signals")
-    ax.legend()
-    plt.show()
+        # ✅ Ensure the title and legend are added to the correct axis
+        axlist[0].set_title(f"{ticker} - AI Trading Signals")
+        axlist[0].legend()
 
+        # ✅ Show or Save the Figure
+        plt.show()  # OR plt.savefig("chart.png")
 
-# Function to preprocess data with enhanced indicators
-# After fetch_historical_data
-
-# Load XGBoost model if it exists, otherwise train it
-# Load LSTM model if it exists, otherwise train it
+    except Exception as e:
+        logging.error(f"❌ ERROR in plot_candlestick_chart: {e}", exc_info=True)
 
 @app.route('/api/alpha-historical-data', methods=['GET'])
 def alpha_historical_data():
@@ -1494,6 +1481,68 @@ def predict_next_day(model, recent_data, scaler, features):
     except Exception as e:
         print(f"❌ ERROR in predict_next_day: {e}")
         return 0  # Default to 0 in case of failure
+    
+@app.route('/api/number-one-picks', methods=['GET'])
+def number_one_picks():
+    try:
+        logging.info("🚀 Running Number One Picks Strategy...")
+        logging.info("📡 Backend hit: /api/number-one-picks")
+
+        # Fetch base historical data
+        df = fetch_historical_data()
+        if df.empty:
+            return jsonify({"error": "No data found"}), 404
+
+        # Filter Step 1: Float < 50M
+        if "float" in df.columns:
+            df = df[df["float"] < 50_000_000]
+        else:
+            logging.warning("⚠️ 'float' column missing, skipping float filter!")
+
+        if df.empty:
+            return jsonify({"error": "No stocks meet float criteria"}), 200
+
+        # Calculate MACD & Signal Lines
+        df["macd"], df["signal"], df["macd_hist"] = compute_macd(df["close"])
+
+        # MACD Condition: macd > signal and macd > 0
+        df["macd_valid"] = (df["macd"] > df["signal"]) & (df["macd"] > 0)
+
+        # Candle Pattern Check: Last 3 candles must be all green
+        df["is_green"] = df["close"] > df["open"]
+        df["green_streak"] = (
+            df["is_green"]
+            .rolling(window=3, min_periods=3)
+            .apply(lambda x: all(x), raw=True)
+        )
+
+        # Trade validation
+        df["valid_trade"] = df["macd_valid"] & (df["green_streak"] == 1.0)
+
+        # Select final candidates
+        selected = df[df["valid_trade"]]
+
+        if selected.empty:
+            logging.info("⚠️ No valid trades found after all filters!")
+            return jsonify({"error": "No valid setups"}), 200
+
+        # Generate entry/exit points
+        selected = generate_trade_signals(selected)
+
+        # 🛠️ FIX: Restore Ticker column for frontend charting
+        if "ticker" in selected.columns:
+            selected["T"] = selected["ticker"]
+        else:
+            logging.warning("⚠️ 'ticker' column missing from selected!")
+
+        # Return candidates
+        return jsonify({
+            "candidates": selected.to_dict(orient="records")
+        }), 200
+
+    except Exception as e:
+        logging.error(f"❌ Error in /api/number-one-picks: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 
 # API to predict using LSTM
@@ -1887,7 +1936,66 @@ def train_xgb_endpoint():
     except Exception as e:
         logging.error(f"❌ ERROR in train-xgb API: {e}")
         return jsonify({"error": str(e)}), 500
+@app.route('/api/stock-data', methods=['GET'])
+def get_stock_data():
+    """
+    Fetch stock data for a given ticker.
+    """
+    try:
+        # ✅ Validate ticker input
+        ticker = request.args.get('ticker')
+        if not ticker:
+            return jsonify({"error": "Ticker parameter is missing"}), 400
 
+        print(f"📌 Fetching stock data for ticker: {ticker}")
+
+        # ✅ Define date range (last 180 days)
+        end_date = datetime.today()
+        start_date = end_date - timedelta(days=180)
+
+        # ✅ Construct API request URL
+        url = (
+            f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/"
+            f"{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}?"
+            f"adjusted=true&sort=asc&apiKey={POLYGON_API_KEY}"
+        )
+
+        # ✅ Fetch data from Polygon API
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        # ✅ Handle missing data
+        if "results" not in data or not data["results"]:
+            print(f"⚠️ Warning: No stock data found for {ticker}. Returning empty response.")
+            return jsonify({
+                "dates": [], "open": [], "high": [], "low": [], "close": [], "volume": []
+            }), 200  # Ensure frontend doesn't break
+
+        # ✅ Convert results to DataFrame
+        results = pd.DataFrame(data["results"])
+
+        # ✅ Ensure required columns exist; if missing, default to empty lists
+        return jsonify({
+            "dates": results["t"].apply(lambda x: datetime.utcfromtimestamp(x / 1000).strftime('%Y-%m-%d')).tolist() if "t" in results else [],
+            "open": results["o"].tolist() if "o" in results else [],
+            "high": results["h"].tolist() if "h" in results else [],
+            "low": results["l"].tolist() if "l" in results else [],
+            "close": results["c"].tolist() if "c" in results else [],
+            "volume": results["v"].tolist() if "v" in results else [],
+        }), 200
+
+    except requests.exceptions.Timeout:
+        print(f"❌ Timeout while fetching data for {ticker}")
+        return jsonify({"error": "External API request timed out"}), 504
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error fetching data for {ticker}: {e}")
+        return jsonify({"error": "External API error"}), 500
+
+    except Exception as e:
+        print(f"❌ Unexpected error processing ticker {ticker}: {e}")
+        return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == "__main__":
     socketio.run(app, port=5000, debug=True)

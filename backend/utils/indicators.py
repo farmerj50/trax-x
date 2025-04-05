@@ -121,6 +121,45 @@ def generate_trade_signals(data, sell_threshold=1.1):
     except Exception as e:
         logging.error(f"❌ Error in generate_trade_signals: {e}", exc_info=True)
         return pd.DataFrame()
+    
+def preprocess_number_one_strategy(df: pd.DataFrame, float_limit: float = 50_000_000):
+    try:
+        df = df.copy()
+
+        logger.info("🚀 Running Number One Picks strategy (updated)...")
+
+        # 1. Filter by Float
+        if "float" in df.columns:
+            df = df[df["float"] < float_limit]
+        else:
+            logger.warning("⚠️ 'float' column missing!")
+        if df.empty:
+            return pd.DataFrame()
+
+        # 2. MACD Calculation
+        df["macd"], df["signal"], df["macd_hist"] = compute_macd(df["close"])
+        df["macd_valid"] = df["macd"] > df["signal"]
+
+        # 3. Candle Pattern
+        df["is_green"] = df["close"] > df["open"]
+
+        # Look for streaks of green candles, with no red interruption
+        df["green_streak"] = df["is_green"].rolling(window=3, min_periods=1).apply(lambda x: (x.sum() == len(x)))
+
+        # 4. Final Selection
+        df["valid_trade"] = df["macd_valid"] & df["green_streak"].fillna(False)
+
+        selected = df[df["valid_trade"]]
+
+        logger.info(f"✅ Strategy matched {len(selected)} valid entries.")
+        return selected
+
+    except Exception as e:
+        logger.error(f"❌ Error in preprocess_number_one_strategy: {e}", exc_info=True)
+        return pd.DataFrame()
+
+
+
 
 
 

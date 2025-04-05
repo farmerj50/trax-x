@@ -186,6 +186,90 @@ label {
   color: #ffffff;
 }
 
+/* Dropdown Menu Styles */
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-btn {
+  background-color: #ffffff;
+  color: #007bff;
+  border: none;
+  border-radius: 5px;
+  padding: 10px 15px;
+  margin: 0 10px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.dropdown-btn:hover {
+  background-color: #0056b3;
+  color: #ffffff;
+}
+/* 🧩 Ensure dropdown stays visible when hovering dropdown or button */
+.dropdown:hover .dropdown-btn,
+.dropdown:hover .dropdown-content {
+  pointer-events: auto;
+}
+
+
+.dropdown-content {
+  display: none;
+  position: absolute;
+  background-color: #ffffff;
+  min-width: 160px;
+  z-index: 1001;
+  top: 100%;
+  left: 0;
+  border-radius: 5px;
+  box-shadow: 0px 8px 16px rgba(0, 0, 0, 0.2);
+}
+
+.dropdown-content a {
+  color: #007bff;
+  padding: 10px 14px;
+  display: block;
+  text-decoration: none;
+  transition: background 0.2s ease;
+}
+
+.dropdown-content a:hover {
+  background-color: #f1f1f1;
+  color: #0056b3;
+}
+
+.dropdown:hover .dropdown-content {
+  display: block;
+}
+
+/* 🌒 Dark Mode Support */
+.dark-mode .dropdown-btn {
+  background-color: #333;
+  color: #e0e0e0;
+}
+
+.dark-mode .dropdown-btn:hover {
+  background-color: #555;
+  color: #fff;
+}
+
+.dark-mode .dropdown-content {
+  background-color: #1e1e1e;
+  box-shadow: 0px 8px 16px rgba(255, 255, 255, 0.1);
+}
+
+.dark-mode .dropdown-content a {
+  color: #e0e0e0;
+}
+
+.dark-mode .dropdown-content a:hover {
+  background-color: #333;
+  color: #fff;
+}
+
+
 /* Chart Container for Stock Page */
 .chart-container-stock-page {
   width: 100%;
